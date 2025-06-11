@@ -2,7 +2,7 @@
  
 # Define variables
 audience="api://azure-oidc-aws/.default"
-roleArn="{}"
+roleArn="arn:aws:iam::123456789012:role/YourRoleName"
 sessionName="AWSAssumeRole"
 clientSecret="{}"
 clientId="{}"
