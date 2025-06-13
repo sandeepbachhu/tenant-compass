@@ -1,8 +1,8 @@
 #!/bin/bash
  
 # Define variables
-audience="api://azure-oidc-aws/.default"
-roleArn="arn:aws:iam::123456789012:role/YourRoleName"
+audience="api://{}/.default"
+roleArn="arn:aws:iam::{}:role/{}"
 sessionName="AWSAssumeRole"
 clientSecret="{}"
 clientId="{}"

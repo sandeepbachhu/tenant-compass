@@ -116,4 +116,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-#python get_oidc_credentials.py --account-id YOUR_ACCOUNT_ID --role-name YOUR_ROLE_NAME --tenant-id YOUR_TENANT_ID --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
+#python3 credentials.py --account-id {} --role-name {} --tenant-id {} --client-id {} --client-secret {}
