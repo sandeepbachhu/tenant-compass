@@ -22,12 +22,89 @@ AZURE_CLIENT_ID = os.getenv('AZURE_CLIENT_ID')
 AZURE_CLIENT_SECRET = os.getenv('AZURE_CLIENT_SECRET')
 SAVE_LOCAL = True
 
-US_REGIONS = {
-    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'us-gov-west-1', 'us-gov-east-1'
+# Region group mapping
+REGION_GROUPS = {
+    "US": {"us-east-1", "us-east-2", "us-west-1", "us-west-2"},
+    "UK": {"eu-west-2"},
+    "EU": {"eu-north-1", "eu-west-1"},
+    "BR": {"sa-east-1"}
 }
 
 OUTPUT_DIR = pathlib.Path.home() / "aws-org-scripts-outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def get_active_regions(tagging_client, account_id):
+    """
+    Get active regions for an account by querying tagged resources.
+    
+    Args:
+        tagging_client: boto3 resourcegroupstaggingapi client
+        account_id (str): AWS account ID
+        
+    Returns:
+        list: Sorted list of active regions
+    """
+    active_regions = set()
+    
+    try:
+        paginator = tagging_client.get_paginator('get_resources')
+        
+        for page in paginator.paginate(ResourcesPerPage=50):
+            for resource in page.get('ResourceTagMappingList', []):
+                resource_arn = resource.get('ResourceARN', '')
+                if resource_arn:
+                    # Extract region from ARN format: arn:aws:service:region:account-id:resource
+                    arn_parts = resource_arn.split(':')
+                    if len(arn_parts) >= 4 and arn_parts[3]:
+                        region = arn_parts[3]
+                        active_regions.add(region)
+        
+        return sorted(list(active_regions))
+        
+    except Exception as e:
+        print(f"⚠️ Warning: Could not fetch active regions for account {account_id}: {e}")
+        return []
+
+def map_regions_to_groups(active_regions):
+    """
+    Map active regions to region groups.
+    
+    Args:
+        active_regions (list): List of active regions
+        
+    Returns:
+        tuple: (region_group, regions_string)
+    """
+    if not active_regions:
+        return '', ''
+    
+    # Find which region groups are represented
+    active_groups = set()
+    mapped_regions = []
+    
+    for region in active_regions:
+        for group_name, group_regions in REGION_GROUPS.items():
+            if region in group_regions:
+                active_groups.add(group_name)
+                mapped_regions.append(region)
+                break
+    
+    # If no regions match our defined groups, return empty
+    if not mapped_regions:
+        return '', ''
+    
+    # Determine region group
+    if len(active_groups) > 1:
+        region_group = "multi"
+    elif len(active_groups) == 1:
+        region_group = list(active_groups)[0]
+    else:
+        region_group = ''
+    
+    # Create comma-separated regions string
+    regions_string = ','.join(sorted(mapped_regions))
+    
+    return region_group, regions_string
 
 def assume_role_with_oidc(account_id, role_name, session_name="OIDCSession"):
     """
@@ -142,6 +219,22 @@ def main():
                 except Exception as e:
                     print(f"⚠️ Warning: Could not fetch tags for account {account_id}: {e}")
 
+                # Get active regions and map to region groups
+                region_group = ''
+                regions = ''
+                try:
+                    # Create a session for this specific account to get its active regions
+                    account_session = assume_role_with_oidc(account_id, ROLE_NAME)
+                    account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
+                    
+                    active_regions = get_active_regions(account_tagging_client, account_id)
+                    region_group, regions = map_regions_to_groups(active_regions)
+                    
+                    print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
+                    
+                except Exception as e:
+                    print(f"⚠️ Warning: Could not determine active regions for account {account_id}: {e}")
+
                 all_account_data.append({
                     "Account_Id": account_id,
                     "Account_Name": account_name,
@@ -149,7 +242,8 @@ def main():
                     "Tenant_Name": org_info['MasterAccountId'],
                     "CSP": "AWS",
                     "Billing_Account_State": account_status,
-                    "Region_Group": '',
+                    "Region_Group": region_group,
+                    "Regions": regions,
                     "Tenant_ID": org_info['MasterAccountId'],
                     "Environment": env_value,
                     "Aide_ID": aide_id_value

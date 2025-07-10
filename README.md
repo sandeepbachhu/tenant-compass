@@ -216,9 +216,107 @@ Each CSV contains the following columns:
 - CSP
 - Billing_Account_State
 - Region_Group
+- Regions
 - Tenant_ID
 - Environment
 - Aide_ID
+
+## Region Detection Feature
+
+### Overview
+
+The script now includes region detection functionality that adds two new columns to the CSV report:
+- **Region_Group**: The region group classification (US, UK, EU, BR, or "multi")
+- **Regions**: Comma-separated list of active regions
+
+### How It Works
+
+The region detection uses the AWS Resource Groups Tagging API to:
+
+1. **Query Tagged Resources**: Uses `resourcegroupstaggingapi.get_resources()` to retrieve all tagged resources across the account
+2. **Extract Regions**: Parses each resource's ARN to extract the region (format: `arn:aws:service:region:account-id:resource`)
+3. **Map to Region Groups**: Maps active regions to predefined region groups:
+   - **US**: us-east-1, us-east-2, us-west-1, us-west-2
+   - **UK**: eu-west-2
+   - **EU**: eu-north-1, eu-west-1
+   - **BR**: sa-east-1
+4. **Determine Classification**:
+   - Single region group active → Returns group name (e.g., "US")
+   - Multiple region groups active → Returns "multi"
+   - No regions in defined groups → Returns empty string
+
+### Resource Types Queried
+
+The API queries **all tagged AWS resources** including:
+- EC2 instances, volumes, VPCs
+- S3 buckets
+- RDS databases
+- Lambda functions
+- Load balancers
+- CloudFormation stacks
+- IAM roles
+- And many more AWS services that support tagging
+
+**Important**: Only resources with tags are detected. Untagged resources won't contribute to region detection.
+
+### Performance Impact
+
+#### Timing Considerations
+- **Small accounts** (few hundred tagged resources): 10-30 seconds per account
+- **Medium accounts** (thousands of tagged resources): 1-5 minutes per account
+- **Large accounts** (tens of thousands of tagged resources): 5-15+ minutes per account
+
+#### Total Script Runtime
+For organizations with multiple accounts, the total runtime can be significant:
+- 10 accounts × 2 minutes average = 20+ minutes
+- 50 accounts × 2 minutes average = 100+ minutes
+
+#### Factors Affecting Performance
+- Number of tagged resources per account
+- API pagination (50 resources per page)
+- Network latency
+- AWS API rate limiting
+
+### Required Additional Permissions
+
+The cross-account role in each organization account needs additional permissions for region detection:
+
+```json
+{
+    "Effect": "Allow",
+    "Action": [
+        "tag:GetResources"
+    ],
+    "Resource": "*"
+}
+```
+
+### Potential Optimizations (Future Considerations)
+
+If performance becomes an issue, consider these optimizations:
+
+1. **Parallel Processing**: Query multiple accounts simultaneously using threading or multiprocessing
+2. **Caching Strategy**: Store region data with TTL and refresh periodically rather than querying every run
+3. **Sampling Approach**: Query only a subset of resources for region detection instead of all tagged resources
+4. **Alternative Data Sources**: 
+   - Use AWS Config for resource inventory
+   - Leverage CloudTrail for region activity detection
+   - Query specific high-volume services (EC2, RDS) instead of all resources
+5. **Timeout Handling**: Implement reasonable timeouts to prevent hanging on problematic accounts
+6. **Incremental Updates**: Only re-scan accounts that have changed since last run
+7. **Resource Filtering**: Focus on specific resource types that are most indicative of regional activity
+
+### Monitoring and Troubleshooting
+
+The script provides detailed logging for region detection:
+- Shows active regions detected for each account
+- Logs warnings for accounts where region detection fails
+- Reports timing information for performance monitoring
+
+Common issues:
+- **No regions detected**: Account may have no tagged resources
+- **Slow performance**: Account has many tagged resources; consider optimization strategies
+- **Permission errors**: Ensure the cross-account role has `tag:GetResources` permission
 
 ## Troubleshooting
 
@@ -228,3 +326,4 @@ Common issues and their solutions:
 2. **IAM Permission Issues**: Verify that the IAM roles have the correct permissions as described in the Prerequisites section.
 3. **Cross-Account Role Not Found**: Ensure the cross-account role exists in each organization account with the correct name and trust policy.
 4. **S3 Bucket Access Denied**: Verify that the script has permission to upload objects to the specified S3 bucket.
+5. **Region Detection Failures**: Ensure the cross-account role has `tag:GetResources` permission for the Resource Groups Tagging API.
