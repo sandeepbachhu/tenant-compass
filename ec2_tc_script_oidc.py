@@ -6,6 +6,7 @@ import csv
 import io
 import pathlib
 import sys
+import re
 import argparse
 from dotenv import load_dotenv
 from boto3.dynamodb.conditions import Attr
@@ -17,7 +18,7 @@ load_dotenv()
 REGION = 'us-east-1'
 S3_BUCKET = os.getenv('OUTPUT_BUCKET')
 DYNAMO_TABLE_NAME = os.getenv('DYNAMO_TABLE_NAME')
-ROLE_NAME = os.getenv('CROSS_ACCOUNT_ROLE_NAME')
+ROLE_NAME = os.getenv('CROSS_ACCOUNT_OIDC_ROLE_NAME')
 AZURE_TENANT_ID = os.getenv('AZURE_TENANT_ID')
 AZURE_CLIENT_ID = os.getenv('AZURE_CLIENT_ID')
 AZURE_CLIENT_SECRET = os.getenv('AZURE_CLIENT_SECRET')
@@ -155,7 +156,7 @@ def main():
     print(f"🔧 Using member account role: {member_role_name}")
     
     # Validate required environment variables
-    required_vars = ['OUTPUT_BUCKET', 'DYNAMO_TABLE_NAME', 'CROSS_ACCOUNT_ROLE_NAME', 
+    required_vars = ['OUTPUT_BUCKET', 'DYNAMO_TABLE_NAME', 'CROSS_ACCOUNT_OIDC_ROLE_NAME',
                      'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
@@ -170,7 +171,7 @@ def main():
     try:
         tenant_ids = []
         scan_kwargs = {
-            'FilterExpression': Attr('tenant_type').eq('Cloud Usage') & Attr('tenant_status').eq('Active') & Attr('cloud_service_provider').eq('AWS')
+            'FilterExpression': Attr('tenant_type').eq('Cloud Usage') & Attr('tenant_status').eq('Active') & Attr('cloud_service_provider').eq('AWS') & Attr('mgmt_category').is_in(['Known Managed', 'Known Partially Managed']
         }
 
         response = table.scan(**scan_kwargs)
@@ -213,6 +214,16 @@ def main():
                 print(f"🔄 Fetched {len(page['Accounts'])} accounts from paginator")
                 member_accounts.extend(page['Accounts'])
 
+
+            # for org account name in the filename
+            try:
+                mgmt_account = org_client.describe_account(AccountId=org_account_id)['Account']
+                raw_org_name = mgmt_account['Name']
+                org_account_name = re.sub(r'[^A-Za-z0-9-]+', '-', raw_org_name).strip('-')
+            except Exception as e:
+                print(f"⚠️ Warning: Could not fetch name for Org account {org_account_id}: {e}")
+                org_account_name = "unknown"
+
             print(f"📋 Total member accounts in org {org_account_id}: {len(member_accounts)}")
 
             all_account_data = []
@@ -249,7 +260,7 @@ def main():
                     print(f"⚠️ Warning: Could not determine active regions for account {account_id} using role {member_role_name}: {e}")
 
                 all_account_data.append({
-                    "Account_Id": account_id,
+                    "Account_ID": account_id,
                     "Account_Name": account_name,
                     "Org_ID": org_info['Id'],
                     "Tenant_Name": org_info['MasterAccountId'],
@@ -266,7 +277,7 @@ def main():
                 print(f"❌ No member accounts found for Org {org_account_id}.")
                 continue
 
-            all_account_data.sort(key=lambda x: x['Account_Id'] != org_account_id)
+            all_account_data.sort(key=lambda x: x['Account_ID'] != org_account_id)
 
             output = io.StringIO()
             writer = csv.DictWriter(output, fieldnames=all_account_data[0].keys())
@@ -274,10 +285,11 @@ def main():
             for row in all_account_data:
                 writer.writerow(row)
 
-            csv_key = f"aws-{org_account_id}-account-metadata-report-{timestamp}.csv"
+            csv_key = f"{org_account_id}_aws_{org_account_name}_tc.csv"
             s3.put_object(Bucket=S3_BUCKET, Key=csv_key, Body=output.getvalue())
             print(f"✅ Uploaded metadata for Org {org_account_id} to S3: {csv_key}")
 
+            # Save to local file system (optional)
             if SAVE_LOCAL:
                 local_path = OUTPUT_DIR / csv_key
                 with open(local_path, 'w') as f:
