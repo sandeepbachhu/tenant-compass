@@ -143,6 +143,44 @@ def assume_role_with_oidc(account_id, role_name, session_name="OIDCSession"):
     except Exception as e:
         raise Exception(f"Error assuming role with OIDC for account {account_id}: {str(e)}")
 
+def assume_member_account_role(org_session, member_account_id, member_role_name, session_name="MemberAccountSession"):
+    """
+    Assume a role in a member account using the organization account session.
+    
+    Args:
+        org_session (boto3.Session): The organization account session
+        member_account_id (str): Member account ID
+        member_role_name (str): Name of the IAM role to assume in the member account
+        session_name (str): Name for the role session
+        
+    Returns:
+        boto3.Session: A boto3 session with the assumed member account role credentials
+    """
+    try:
+        # Use the organization session to assume the member account role via regular STS
+        sts_client = org_session.client('sts', region_name=REGION)
+        role_arn = f"arn:aws:iam::{member_account_id}:role/{member_role_name}"
+        
+        response = sts_client.assume_role(
+            RoleArn=role_arn,
+            RoleSessionName=session_name
+        )
+        
+        creds = response['Credentials']
+        
+        # Create a boto3 session with the member account credentials
+        session = boto3.Session(
+            aws_access_key_id=creds['AccessKeyId'],
+            aws_secret_access_key=creds['SecretAccessKey'],
+            aws_session_token=creds['SessionToken'],
+            region_name=REGION
+        )
+        
+        return session
+        
+    except Exception as e:
+        raise Exception(f"Error assuming member account role {member_role_name} in account {member_account_id}: {str(e)}")
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='AWS Organization Account Metadata Collection Script with OIDC Authentication')
@@ -171,7 +209,7 @@ def main():
     try:
         tenant_ids = []
         scan_kwargs = {
-            'FilterExpression': Attr('tenant_type').eq('Cloud Usage') & Attr('tenant_status').eq('Active') & Attr('cloud_service_provider').eq('AWS') & Attr('mgmt_category').is_in(['Known Managed', 'Known Partially Managed']
+            'FilterExpression': Attr('tenant_type').eq('Cloud Usage') & Attr('tenant_status').eq('Active') & Attr('cloud_service_provider').eq('AWS') & Attr('mgmt_category').is_in(['Known Managed', 'Known Partially Managed'])
         }
 
         response = table.scan(**scan_kwargs)
@@ -246,10 +284,15 @@ def main():
                 region_group = ''
                 regions = ''
                 try:
-                    # Create a session for this specific account to get its active regions
-                    # Use the member role instead of the main ROLE_NAME
-                    account_session = assume_role_with_oidc(account_id, member_role_name)
-                    account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
+                    if account_id == org_account_id:
+                        # For organization account, use the existing organization session
+                        account_tagging_client = tagging_client
+                        print(f"🌍 Using organization session for account {account_id} (management account)")
+                    else:
+                        # For member accounts, assume the member role using the organization session
+                        account_session = assume_member_account_role(session, account_id, member_role_name)
+                        account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
+                        print(f"🌍 Using member role {member_role_name} for account {account_id}")
                     
                     active_regions = get_active_regions(account_tagging_client, account_id)
                     region_group, regions = map_regions_to_groups(active_regions)
@@ -257,7 +300,10 @@ def main():
                     print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not determine active regions for account {account_id} using role {member_role_name}: {e}")
+                    if account_id == org_account_id:
+                        print(f"⚠️ Warning: Could not determine active regions for organization account {account_id}: {e}")
+                    else:
+                        print(f"⚠️ Warning: Could not determine active regions for member account {account_id} using role {member_role_name}: {e}")
 
                 all_account_data.append({
                     "Account_ID": account_id,
