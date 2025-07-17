@@ -1,8 +1,16 @@
-# AWS Organization Account Metadata Collection Script
+# AWS Organization Account Metadata Collection Scripts
 
 ## Overview
 
-This Python script (`ec2_tc_script_save_local.py`) is designed to collect metadata from AWS Organization accounts and their member accounts. It performs the following operations:
+This repository contains two Python scripts for collecting metadata from AWS Organization accounts and their member accounts:
+
+### 1. Original Script (`ec2_tc_script_save_local.py`)
+The original script that uses direct AWS IAM role assumption for cross-account access.
+
+### 2. OIDC Script (`ec2_tc_script_oidc.py`) - **Recommended**
+An enhanced version that uses OIDC (OpenID Connect) authentication with Azure AD for more secure cross-account access.
+
+Both scripts perform the following operations:
 
 1. Scans a DynamoDB table to identify active AWS Cloud Usage tenants
 2. For each organization account:
@@ -13,18 +21,33 @@ This Python script (`ec2_tc_script_save_local.py`) is designed to collect metada
    - Uploads the report to an S3 bucket
    - Optionally saves a local copy
 
-The script is intended to run on an EC2 instance or locally, and it uses environment variables for configuration.
+The scripts are intended to run on an EC2 instance or locally, and use environment variables for configuration.
 
 ## Prerequisites
 
 ### Environment Variables
 
-The script requires the following environment variables to be set in a `.env` file:
+#### For Original Script (`ec2_tc_script_save_local.py`)
+
+The original script requires the following environment variables to be set in a `.env` file:
 
 ```
 OUTPUT_BUCKET=your-s3-bucket-name
 DYNAMO_TABLE_NAME=your-dynamodb-table-name
 CROSS_ACCOUNT_ROLE_NAME=your-cross-account-role-name
+```
+
+#### For OIDC Script (`ec2_tc_script_oidc.py`) - **Recommended**
+
+The OIDC script requires additional environment variables for Azure AD authentication:
+
+```
+OUTPUT_BUCKET=your-s3-bucket-name
+DYNAMO_TABLE_NAME=your-dynamodb-table-name
+CROSS_ACCOUNT_ROLE_NAME=your-cross-account-role-name
+AZURE_TENANT_ID=your-azure-tenant-id
+AZURE_CLIENT_ID=your-azure-client-id
+AZURE_CLIENT_SECRET=your-azure-client-secret
 ```
 
 ### Python Dependencies
@@ -125,6 +148,8 @@ Example IAM Policy for the Cross-Account Role:
 
 ### Trust Policy for Cross-Account Role
 
+#### For Original Script (`ec2_tc_script_save_local.py`)
+
 Each organization account must have a trust policy that allows the EC2 instance or local execution role to assume the cross-account role:
 
 ```json
@@ -145,15 +170,93 @@ Each organization account must have a trust policy that allows the EC2 instance 
 
 Replace `ACCOUNT_ID_RUNNING_SCRIPT` with the AWS account ID where the script is running, and `ROLE_NAME_RUNNING_SCRIPT` with the role name that is executing the script.
 
+#### For OIDC Script (`ec2_tc_script_oidc.py`) - **Recommended**
+
+Each organization account must have a trust policy that allows the Azure AD OIDC provider to assume the cross-account role:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/sts.windows.net/AZURE_TENANT_ID"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+                "StringEquals": {
+                    "sts.windows.net/AZURE_TENANT_ID:aud": "api://azure-oidc-aws/.default",
+                    "sts.windows.net/AZURE_TENANT_ID:sub": "AZURE_CLIENT_ID"
+                }
+            }
+        }
+    ]
+}
+```
+
+Replace:
+- `ACCOUNT_ID` with the AWS account ID where the role exists
+- `AZURE_TENANT_ID` with your Azure AD tenant ID
+- `AZURE_CLIENT_ID` with your Azure AD application client ID
+
+#### Member Account Role Requirements (OIDC Script Only)
+
+For the OIDC script, member accounts need an additional role for region detection. This role should have the same trust policy as above but with minimal permissions for resource tagging API access:
+
+**Role Name**: `tenant-compass-member-role` (default) or specified via `--member-role` parameter
+
+**Trust Policy**: Same as the main cross-account role above
+
+**IAM Policy**:
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "tag:GetResources"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
 ## Execution
 
-Run the script using Python:
+### Original Script
+
+Run the original script using Python:
 
 ```bash
 python ec2_tc_script_save_local.py
 ```
 
-By default, the script will:
+### OIDC Script - **Recommended**
+
+Run the OIDC script using Python:
+
+```bash
+# Using default member role (tenant-compass-member-role)
+python ec2_tc_script_oidc.py
+
+# Using custom member role
+python ec2_tc_script_oidc.py --member-role my-custom-member-role
+
+# View help
+python ec2_tc_script_oidc.py --help
+```
+
+#### Command Line Options
+
+- `--member-role`: Specifies the IAM role name to use for accessing member accounts to get region information
+  - **Default**: `tenant-compass-member-role`
+  - **Purpose**: This role is used specifically for querying tagged resources in member accounts to determine active regions
+  - **Why needed**: The main organization role may not exist in all member accounts
+
+By default, both scripts will:
 1. Save CSV reports to the specified S3 bucket
 2. Save local copies of the reports to `~/aws-org-scripts-outputs/`
 

@@ -6,6 +6,7 @@ import csv
 import io
 import pathlib
 import sys
+import argparse
 from dotenv import load_dotenv
 from boto3.dynamodb.conditions import Attr
 from credentials import get_oidc_credentials
@@ -142,6 +143,17 @@ def assume_role_with_oidc(account_id, role_name, session_name="OIDCSession"):
         raise Exception(f"Error assuming role with OIDC for account {account_id}: {str(e)}")
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='AWS Organization Account Metadata Collection Script with OIDC Authentication')
+    parser.add_argument('--member-role', 
+                        default='tenant-compass-member-role',
+                        help='IAM role name to use for accessing member accounts to get region information (default: tenant-compass-member-role)')
+    
+    args = parser.parse_args()
+    member_role_name = args.member_role
+    
+    print(f"🔧 Using member account role: {member_role_name}")
+    
     # Validate required environment variables
     required_vars = ['OUTPUT_BUCKET', 'DYNAMO_TABLE_NAME', 'CROSS_ACCOUNT_ROLE_NAME', 
                      'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET']
@@ -224,7 +236,8 @@ def main():
                 regions = ''
                 try:
                     # Create a session for this specific account to get its active regions
-                    account_session = assume_role_with_oidc(account_id, ROLE_NAME)
+                    # Use the member role instead of the main ROLE_NAME
+                    account_session = assume_role_with_oidc(account_id, member_role_name)
                     account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
                     
                     active_regions = get_active_regions(account_tagging_client, account_id)
@@ -233,7 +246,7 @@ def main():
                     print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not determine active regions for account {account_id}: {e}")
+                    print(f"⚠️ Warning: Could not determine active regions for account {account_id} using role {member_role_name}: {e}")
 
                 all_account_data.append({
                     "Account_Id": account_id,
