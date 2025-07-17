@@ -334,19 +334,47 @@ The script now includes region detection functionality that adds two new columns
 
 ### How It Works
 
-The region detection uses the AWS Resource Groups Tagging API to:
+The region detection uses the AWS Resource Groups Tagging API with different authentication methods for organization vs member accounts:
 
-1. **Query Tagged Resources**: Uses `resourcegroupstaggingapi.get_resources()` to retrieve all tagged resources across the account
-2. **Extract Regions**: Parses each resource's ARN to extract the region (format: `arn:aws:service:region:account-id:resource`)
+#### For Organization Accounts:
+- Uses the existing OIDC-authenticated organization session
+- The organization role already has the required `tag:GetResources` permission
+
+#### For Member Accounts:
+- Uses the organization session to assume the member account role via regular STS AssumeRole
+- The member account role (default: `tenant-compass-member-role`) must have `tag:GetResources` permission
+- This role trusts the organization account's IAM role, not the OIDC provider
+
+### Global Region Discovery Process:
+
+1. **Single Global API Call**: Uses `resourcegroupstaggingapi.get_resources()` from us-east-1
+   - **Important**: This API is global and can discover tagged resources across ALL AWS regions worldwide
+   - The us-east-1 is only the API client connection point, not a limitation on discovery scope
+
+2. **Extract Regions**: Parses each resource's ARN to extract the actual region (format: `arn:aws:service:region:account-id:resource`)
+   - Example: `arn:aws:ec2:eu-west-1:123456789012:instance/i-1234567890abcdef0` → region = `eu-west-1`
+
 3. **Map to Region Groups**: Maps active regions to predefined region groups:
    - **US**: us-east-1, us-east-2, us-west-1, us-west-2
    - **UK**: eu-west-2
    - **EU**: eu-north-1, eu-west-1
    - **BR**: sa-east-1
+
 4. **Determine Classification**:
    - Single region group active → Returns group name (e.g., "US")
    - Multiple region groups active → Returns "multi"
    - No regions in defined groups → Returns empty string
+
+### Example:
+If an account has resources in:
+- EC2 instances in us-west-2
+- RDS databases in eu-west-1
+- Lambda functions in us-east-1
+
+**Result**: 
+- **Active regions detected**: `['eu-west-1', 'us-east-1', 'us-west-2']`
+- **Region_Group**: `multi` (spans US and EU)
+- **Regions**: `eu-west-1,us-east-1,us-west-2`
 
 ### Resource Types Queried
 

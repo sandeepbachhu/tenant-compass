@@ -32,8 +32,28 @@ REGION_GROUPS = {
     "BR": {"sa-east-1"}
 }
 
+# Tag name variations for robust tag detection
+ENVIRONMENT_TAG_VARIATIONS = ['environment', 'Environment', 'ENVIRONMENT', 'env', 'Env', 'ENV']
+AIDE_ID_TAG_VARIATIONS = ['aide-id', 'AIDE_ID', 'AIDE-ID', 'aide_id', 'aideId', 'AideId']
+
 OUTPUT_DIR = pathlib.Path.home() / "aws-org-scripts-outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def find_tag_value(tags_dict, tag_variations):
+    """
+    Find tag value by checking multiple tag name variations.
+    
+    Args:
+        tags_dict (dict): Dictionary of tag key-value pairs
+        tag_variations (list): List of tag name variations to check
+        
+    Returns:
+        str: Tag value if found, empty string otherwise
+    """
+    for variation in tag_variations:
+        if variation in tags_dict:
+            return tags_dict[variation]
+    return ''
 
 def get_active_regions(tagging_client, account_id):
     """
@@ -64,7 +84,7 @@ def get_active_regions(tagging_client, account_id):
         return sorted(list(active_regions))
         
     except Exception as e:
-        print(f"⚠️ Warning: Could not fetch active regions for account {account_id}: {e}")
+        print(f" Warning: Could not fetch active regions for account {account_id}: {e}")
         return []
 
 def map_regions_to_groups(active_regions):
@@ -191,7 +211,7 @@ def main():
     args = parser.parse_args()
     member_role_name = args.member_role
     
-    print(f"🔧 Using member account role: {member_role_name}")
+    print(f" Using member account role: {member_role_name}")
     
     # Validate required environment variables
     required_vars = ['OUTPUT_BUCKET', 'DYNAMO_TABLE_NAME', 'CROSS_ACCOUNT_OIDC_ROLE_NAME',
@@ -199,7 +219,7 @@ def main():
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
-        print(f"❌ Missing required environment variables: {', '.join(missing_vars)}")
+        print(f" Missing required environment variables: {', '.join(missing_vars)}")
         print("Please set these variables in your .env file or environment.")
         sys.exit(1)
 
@@ -221,11 +241,11 @@ def main():
             items = response.get('Items', [])
             tenant_ids.extend(item['tenant_id'] for item in items)
 
-        print(f"✅ Total active Cloud Usage tenant accounts found: {len(tenant_ids)}")
+        print(f" Total active Cloud Usage tenant accounts found: {len(tenant_ids)}")
         print("Tenant IDs:", tenant_ids)
 
     except Exception as e:
-        print(f"❌ Error scanning DynamoDB table: {e}")
+        print(f" Error scanning DynamoDB table: {e}")
         return
 
     s3 = boto3.client('s3', region_name=REGION)
@@ -233,7 +253,7 @@ def main():
 
     for org_account_id in tenant_ids:
         try:
-            print(f"\n➡️ Processing Org account: {org_account_id}")
+            print(f"\n Processing Org account: {org_account_id}")
             # Use OIDC authentication instead of direct role assumption
             session = assume_role_with_oidc(org_account_id, ROLE_NAME)
             org_client = session.client('organizations', region_name=REGION)
@@ -243,13 +263,13 @@ def main():
 
             org_info = org_client.describe_organization()['Organization']
             if org_info['MasterAccountId'] != org_account_id:
-                print(f"⏭️ Skipping {org_account_id}: Not a management account.")
+                print(f" Skipping {org_account_id}: Not a management account.")
                 continue
 
             member_accounts = []
             paginator = org_client.get_paginator('list_accounts')
             for page in paginator.paginate():
-                print(f"🔄 Fetched {len(page['Accounts'])} accounts from paginator")
+                print(f" Fetched {len(page['Accounts'])} accounts from paginator")
                 member_accounts.extend(page['Accounts'])
 
 
@@ -259,10 +279,10 @@ def main():
                 raw_org_name = mgmt_account['Name']
                 org_account_name = re.sub(r'[^A-Za-z0-9-]+', '-', raw_org_name).strip('-')
             except Exception as e:
-                print(f"⚠️ Warning: Could not fetch name for Org account {org_account_id}: {e}")
+                print(f" Warning: Could not fetch name for Org account {org_account_id}: {e}")
                 org_account_name = "unknown"
 
-            print(f"📋 Total member accounts in org {org_account_id}: {len(member_accounts)}")
+            print(f" Total member accounts in org {org_account_id}: {len(member_accounts)}")
 
             all_account_data = []
             for account in member_accounts:
@@ -274,11 +294,15 @@ def main():
                 aide_id_value = ''
                 try:
                     tags_response = org_client.list_tags_for_resource(ResourceId=account_id)
-                    tags = {tag['Key'].lower(): tag['Value'] for tag in tags_response.get('Tags', [])}
-                    env_value = tags.get('environment', '')
-                    aide_id_value = tags.get('aide-id', '')
+                    # Keep original tag keys (don't convert to lowercase) for robust tag detection
+                    tags = {tag['Key']: tag['Value'] for tag in tags_response.get('Tags', [])}
+                    
+                    # Use helper function to find tag values by checking multiple variations
+                    env_value = find_tag_value(tags, ENVIRONMENT_TAG_VARIATIONS)
+                    aide_id_value = find_tag_value(tags, AIDE_ID_TAG_VARIATIONS)
+                    
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not fetch tags for account {account_id}: {e}")
+                    print(f" Warning: Could not fetch tags for account {account_id}: {e}")
 
                 # Get active regions and map to region groups
                 region_group = ''
@@ -287,23 +311,23 @@ def main():
                     if account_id == org_account_id:
                         # For organization account, use the existing organization session
                         account_tagging_client = tagging_client
-                        print(f"🌍 Using organization session for account {account_id} (management account)")
+                        print(f" Using organization session for account {account_id} (management account)")
                     else:
                         # For member accounts, assume the member role using the organization session
                         account_session = assume_member_account_role(session, account_id, member_role_name)
                         account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
-                        print(f"🌍 Using member role {member_role_name} for account {account_id}")
+                        print(f" Using member role {member_role_name} for account {account_id}")
                     
                     active_regions = get_active_regions(account_tagging_client, account_id)
                     region_group, regions = map_regions_to_groups(active_regions)
                     
-                    print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
+                    print(f" Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     
                 except Exception as e:
                     if account_id == org_account_id:
-                        print(f"⚠️ Warning: Could not determine active regions for organization account {account_id}: {e}")
+                        print(f" Warning: Could not determine active regions for organization account {account_id}: {e}")
                     else:
-                        print(f"⚠️ Warning: Could not determine active regions for member account {account_id} using role {member_role_name}: {e}")
+                        print(f" Warning: Could not determine active regions for member account {account_id} using role {member_role_name}: {e}")
 
                 all_account_data.append({
                     "Account_ID": account_id,
@@ -320,7 +344,7 @@ def main():
                 })
 
             if not all_account_data:
-                print(f"❌ No member accounts found for Org {org_account_id}.")
+                print(f" No member accounts found for Org {org_account_id}.")
                 continue
 
             all_account_data.sort(key=lambda x: x['Account_ID'] != org_account_id)
@@ -333,17 +357,17 @@ def main():
 
             csv_key = f"{org_account_id}_aws_{org_account_name}_tc.csv"
             s3.put_object(Bucket=S3_BUCKET, Key=csv_key, Body=output.getvalue())
-            print(f"✅ Uploaded metadata for Org {org_account_id} to S3: {csv_key}")
+            print(f" Uploaded metadata for Org {org_account_id} to S3: {csv_key}")
 
             # Save to local file system (optional)
             if SAVE_LOCAL:
                 local_path = OUTPUT_DIR / csv_key
                 with open(local_path, 'w') as f:
                     f.write(output.getvalue())
-                print(f"📁 Saved local backup at: {local_path}")
+                print(f" Saved local backup at: {local_path}")
 
         except Exception as e:
-            print(f"❌ Skipping Org account {org_account_id} due to error: {e}")
+            print(f" Skipping Org account {org_account_id} due to error: {e}")
 
 if __name__ == '__main__':
     main()
