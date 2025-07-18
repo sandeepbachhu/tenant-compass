@@ -69,9 +69,11 @@ def get_active_regions(tagging_client, account_id):
     active_regions = set()
     resource_count_by_region = {}
     resource_count_by_service = {}
+    ec2_resource_types = {}
     total_resources = 0
     page_count = 0
     sample_resources = []
+    region_samples = {}  # Group samples by region
     
     try:
         print(f"  🔍 Starting region detection for account {account_id}...")
@@ -95,20 +97,47 @@ def get_active_regions(tagging_client, account_id):
                         service = arn_parts[2] if len(arn_parts) > 2 else 'unknown'
                         region = arn_parts[3] if arn_parts[3] else 'global'
                         
-                        # Count resources by region and service
+                        # Extract EC2 resource type for detailed analysis
+                        resource_type = 'unknown'
+                        if service == 'ec2' and len(arn_parts) >= 6:
+                            # Format: arn:aws:ec2:region:account:resource-type/resource-id
+                            resource_type_part = arn_parts[5]
+                            if '/' in resource_type_part:
+                                resource_type = resource_type_part.split('/')[0]
+                            else:
+                                resource_type = resource_type_part
+                        
+                        # Count resources by region, service, and EC2 type
                         resource_count_by_region[region] = resource_count_by_region.get(region, 0) + 1
                         resource_count_by_service[service] = resource_count_by_service.get(service, 0) + 1
+                        
+                        if service == 'ec2':
+                            ec2_resource_types[resource_type] = ec2_resource_types.get(resource_type, 0) + 1
                         
                         # Only add non-empty regions to active regions (skip global services)
                         if region and region != 'global':
                             active_regions.add(region)
                         
-                        # Collect sample resources for debugging (first 20)
-                        if len(sample_resources) < 20:
+                        # Collect sample resources grouped by region (up to 10 per region)
+                        if region not in region_samples:
+                            region_samples[region] = []
+                        
+                        if len(region_samples[region]) < 10:
+                            region_samples[region].append({
+                                'arn': resource_arn,
+                                'service': service,
+                                'region': region,
+                                'resource_type': resource_type if service == 'ec2' else service,
+                                'tags': len(resource.get('Tags', []))
+                            })
+                        
+                        # Also keep overall samples for backward compatibility
+                        if len(sample_resources) < 50:
                             sample_resources.append({
                                 'arn': resource_arn,
                                 'service': service,
                                 'region': region,
+                                'resource_type': resource_type if service == 'ec2' else service,
                                 'tags': len(resource.get('Tags', []))
                             })
                     else:
@@ -122,13 +151,31 @@ def get_active_regions(tagging_client, account_id):
         print(f"    • Resources by region: {dict(sorted(resource_count_by_region.items()))}")
         print(f"    • Resources by service: {dict(sorted(resource_count_by_service.items()))}")
         
-        # Print sample resources for debugging
-        if sample_resources:
-            print(f"  📋 Sample Resources (first {len(sample_resources)}):")
-            for i, res in enumerate(sample_resources[:10], 1):  # Show first 10
-                print(f"    {i:2d}. {res['service']:15} | {res['region']:12} | {res['tags']} tags | {res['arn']}")
-            if len(sample_resources) > 10:
-                print(f"    ... and {len(sample_resources) - 10} more resources")
+        # Print EC2 resource type breakdown
+        if ec2_resource_types:
+            print(f"  🏗️  EC2 Resource Types Breakdown:")
+            for resource_type, count in sorted(ec2_resource_types.items()):
+                print(f"    • {resource_type}: {count}")
+        
+        # Print sample resources grouped by region
+        print(f"  📋 Sample Resources by Region:")
+        for region in sorted(region_samples.keys()):
+            samples = region_samples[region]
+            print(f"    🌍 {region} ({len(samples)} samples shown):")
+            for i, res in enumerate(samples, 1):
+                resource_display = f"{res['resource_type']}" if res['service'] == 'ec2' else f"{res['service']}"
+                print(f"      {i:2d}. {resource_display:20} | {res['tags']} tags | {res['arn']}")
+        
+        # Special focus on us-west-2 if it exists
+        if 'us-west-2' in region_samples:
+            print(f"  🎯 FOUND US-WEST-2 RESOURCES! ({len(region_samples['us-west-2'])} samples)")
+            for i, res in enumerate(region_samples['us-west-2'], 1):
+                print(f"    {i}. {res['resource_type']:20} | {res['arn']}")
+        elif 'us-west-2' not in active_regions:
+            print(f"  ❌ NO US-WEST-2 RESOURCES FOUND in tagged resources")
+            print(f"     This means either:")
+            print(f"     • No resources in us-west-2 have tags")
+            print(f"     • VPCs and related resources in us-west-2 are untagged")
         
         if not active_regions:
             print(f"  ⚠️  No active regions found - this could mean:")
