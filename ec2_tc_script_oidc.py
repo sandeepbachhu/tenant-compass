@@ -67,24 +67,83 @@ def get_active_regions(tagging_client, account_id):
         list: Sorted list of active regions
     """
     active_regions = set()
+    resource_count_by_region = {}
+    resource_count_by_service = {}
+    total_resources = 0
+    page_count = 0
+    sample_resources = []
     
     try:
+        print(f"  🔍 Starting region detection for account {account_id}...")
         paginator = tagging_client.get_paginator('get_resources')
         
         for page in paginator.paginate(ResourcesPerPage=50):
-            for resource in page.get('ResourceTagMappingList', []):
+            page_count += 1
+            resources = page.get('ResourceTagMappingList', [])
+            page_resource_count = len(resources)
+            total_resources += page_resource_count
+            
+            print(f"    📄 Page {page_count}: Found {page_resource_count} tagged resources")
+            
+            for resource in resources:
                 resource_arn = resource.get('ResourceARN', '')
                 if resource_arn:
                     # Extract region from ARN format: arn:aws:service:region:account-id:resource
                     arn_parts = resource_arn.split(':')
-                    if len(arn_parts) >= 4 and arn_parts[3]:
-                        region = arn_parts[3]
-                        active_regions.add(region)
+                    
+                    if len(arn_parts) >= 4:
+                        service = arn_parts[2] if len(arn_parts) > 2 else 'unknown'
+                        region = arn_parts[3] if arn_parts[3] else 'global'
+                        
+                        # Count resources by region and service
+                        resource_count_by_region[region] = resource_count_by_region.get(region, 0) + 1
+                        resource_count_by_service[service] = resource_count_by_service.get(service, 0) + 1
+                        
+                        # Only add non-empty regions to active regions (skip global services)
+                        if region and region != 'global':
+                            active_regions.add(region)
+                        
+                        # Collect sample resources for debugging (first 20)
+                        if len(sample_resources) < 20:
+                            sample_resources.append({
+                                'arn': resource_arn,
+                                'service': service,
+                                'region': region,
+                                'tags': len(resource.get('Tags', []))
+                            })
+                    else:
+                        print(f"    ⚠️  Invalid ARN format: {resource_arn}")
+        
+        # Print detailed debugging information
+        print(f"  📊 Region Detection Summary for Account {account_id}:")
+        print(f"    • Total pages processed: {page_count}")
+        print(f"    • Total tagged resources found: {total_resources}")
+        print(f"    • Active regions detected: {sorted(list(active_regions))}")
+        print(f"    • Resources by region: {dict(sorted(resource_count_by_region.items()))}")
+        print(f"    • Resources by service: {dict(sorted(resource_count_by_service.items()))}")
+        
+        # Print sample resources for debugging
+        if sample_resources:
+            print(f"  📋 Sample Resources (first {len(sample_resources)}):")
+            for i, res in enumerate(sample_resources[:10], 1):  # Show first 10
+                print(f"    {i:2d}. {res['service']:15} | {res['region']:12} | {res['tags']} tags | {res['arn']}")
+            if len(sample_resources) > 10:
+                print(f"    ... and {len(sample_resources) - 10} more resources")
+        
+        if not active_regions:
+            print(f"  ⚠️  No active regions found - this could mean:")
+            print(f"      • No tagged resources exist in this account")
+            print(f"      • All resources are global services (no region in ARN)")
+            print(f"      • Permission issues with Resource Groups Tagging API")
         
         return sorted(list(active_regions))
         
     except Exception as e:
-        print(f" Warning: Could not fetch active regions for account {account_id}: {e}")
+        print(f"  ❌ Error fetching active regions for account {account_id}: {e}")
+        print(f"     This could be due to:")
+        print(f"     • Missing 'tag:GetResources' permission")
+        print(f"     • Network connectivity issues")
+        print(f"     • API rate limiting")
         return []
 
 def map_regions_to_groups(active_regions):
