@@ -151,14 +151,63 @@ def get_active_regions(tagging_client, account_id):
         print(f"    • Resources by region: {dict(sorted(resource_count_by_region.items()))}")
         print(f"    • Resources by service: {dict(sorted(resource_count_by_service.items()))}")
         
-        # Print EC2 resource type breakdown
+        # Print EC2 resource type breakdown with ALL ARNs
         if ec2_resource_types:
             print(f"  🏗️  EC2 Resource Types Breakdown:")
             for resource_type, count in sorted(ec2_resource_types.items()):
                 print(f"    • {resource_type}: {count}")
         
-        # Print sample resources grouped by region
-        print(f"  📋 Sample Resources by Region:")
+        # Print ALL resources grouped by EC2 resource type (not just samples)
+        if ec2_resource_types:
+            print(f"  📋 ALL EC2 Resources by Type and Region:")
+            
+            # Collect all EC2 resources by type
+            ec2_resources_by_type = {}
+            
+            # Re-process all resources to collect EC2 resources by type
+            paginator = tagging_client.get_paginator('get_resources')
+            for page in paginator.paginate(ResourcesPerPage=50):
+                for resource in page.get('ResourceTagMappingList', []):
+                    resource_arn = resource.get('ResourceARN', '')
+                    if resource_arn and ':ec2:' in resource_arn:
+                        arn_parts = resource_arn.split(':')
+                        if len(arn_parts) >= 6:
+                            region = arn_parts[3] if arn_parts[3] else 'global'
+                            resource_type_part = arn_parts[5]
+                            resource_type = resource_type_part.split('/')[0] if '/' in resource_type_part else resource_type_part
+                            
+                            if resource_type not in ec2_resources_by_type:
+                                ec2_resources_by_type[resource_type] = []
+                            
+                            ec2_resources_by_type[resource_type].append({
+                                'arn': resource_arn,
+                                'region': region,
+                                'tags': len(resource.get('Tags', []))
+                            })
+            
+            # Print all resources for each type
+            for resource_type in sorted(ec2_resources_by_type.keys()):
+                resources = ec2_resources_by_type[resource_type]
+                print(f"    🔧 {resource_type.upper()} ({len(resources)} total):")
+                
+                # Group by region for this resource type
+                by_region = {}
+                for res in resources:
+                    region = res['region']
+                    if region not in by_region:
+                        by_region[region] = []
+                    by_region[region].append(res)
+                
+                # Print resources grouped by region
+                for region in sorted(by_region.keys()):
+                    region_resources = by_region[region]
+                    print(f"      🌍 {region} ({len(region_resources)} resources):")
+                    for i, res in enumerate(region_resources, 1):
+                        print(f"        {i:2d}. {res['tags']} tags | {res['arn']}")
+                print()  # Empty line between resource types
+        
+        # Print sample resources grouped by region (keep this for non-EC2 services)
+        print(f"  📋 Sample Resources by Region (All Services):")
         for region in sorted(region_samples.keys()):
             samples = region_samples[region]
             print(f"    🌍 {region} ({len(samples)} samples shown):")
