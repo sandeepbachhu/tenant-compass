@@ -534,21 +534,30 @@ def main():
                         print(f"🌍 Using organization session for account {account_id} (management account)")
                     else:
                         # For member accounts, assume the member role using the organization session
-                        account_session = assume_member_account_role(session, account_id, member_role_name)
-                        account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
-                        print(f"🌍 Using member role {member_role_name} for account {account_id}")
+                        try:
+                            account_session = assume_member_account_role(session, account_id, member_role_name)
+                            account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
+                            print(f"🌍 Using member role {member_role_name} for account {account_id}")
+                        except Exception as role_error:
+                            print(f"❌ Failed to assume role {member_role_name} in account {account_id}: {role_error}")
+                            # Set account_tagging_client to None to skip region detection
+                            account_tagging_client = None
                     
-                    active_regions = get_active_regions(account_tagging_client, account_id)
-                    region_group, regions = map_regions_to_groups(active_regions)
-                    
-                    print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
+                    if account_tagging_client:
+                        active_regions = get_active_regions(account_tagging_client, account_id)
+                        region_group, regions = map_regions_to_groups(active_regions)
+                        print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
+                    else:
+                        print(f"⚠️ Skipping region detection for account {account_id} due to role assumption failure")
                     
                 except Exception as e:
                     if account_id == org_account_id:
                         print(f"⚠️ Warning: Could not determine active regions for organization account {account_id}: {e}")
                     else:
-                        print(f"⚠️ Warning: Could not determine active regions for member account {account_id} using role {member_role_name}: {e}")
+                        print(f"⚠️ Warning: Could not determine active regions for member account {account_id}: {e}")
 
+                # Always add account data to CSV, even if region detection failed
+                print(f"📝 Adding account {account_id} ({account_name}) to CSV with regions: {regions}")
                 all_account_data.append({
                     "Account_ID": account_id,
                     "Account_Name": account_name,
