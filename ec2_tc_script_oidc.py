@@ -55,17 +55,25 @@ def find_tag_value(tags_dict, tag_variations):
             return tags_dict[variation]
     return ''
 
-def get_active_regions(tagging_client, account_id):
+def get_active_regions(session, account_id):
     """
-    Get active regions for an account by querying tagged resources.
+    Get active regions for an account by querying tagged resources across multiple regions.
     
     Args:
-        tagging_client: boto3 resourcegroupstaggingapi client
+        session: boto3 session for the account
         account_id (str): AWS account ID
         
     Returns:
         list: Sorted list of active regions
     """
+    # List of regions to scan - add more as needed
+    regions_to_scan = [
+        'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+        'eu-west-1', 'eu-west-2', 'eu-central-1', 'eu-north-1',
+        'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1',
+        'ca-central-1', 'sa-east-1'
+    ]
+    
     active_regions = set()
     resource_count_by_region = {}
     resource_count_by_service = {}
@@ -76,72 +84,97 @@ def get_active_regions(tagging_client, account_id):
     region_samples = {}  # Group samples by region
     
     try:
-        print(f"  🔍 Starting region detection for account {account_id}...")
-        paginator = tagging_client.get_paginator('get_resources')
+        print(f"  🔍 Starting region detection for account {account_id} across {len(regions_to_scan)} regions...")
         
-        for page in paginator.paginate(ResourcesPerPage=50):
-            page_count += 1
-            resources = page.get('ResourceTagMappingList', [])
-            page_resource_count = len(resources)
-            total_resources += page_resource_count
-            
-            print(f"    📄 Page {page_count}: Found {page_resource_count} tagged resources")
-            
-            for resource in resources:
-                resource_arn = resource.get('ResourceARN', '')
-                if resource_arn:
-                    # Extract region from ARN format: arn:aws:service:region:account-id:resource
-                    arn_parts = resource_arn.split(':')
+        # Scan each region separately since the API is regional
+        for scan_region in regions_to_scan:
+            try:
+                print(f"    🌍 Checking region: {scan_region}")
+                tagging_client = session.client('resourcegroupstaggingapi', region_name=scan_region)
+                paginator = tagging_client.get_paginator('get_resources')
+                region_resources = 0
+                
+                for page in paginator.paginate(ResourcesPerPage=50):
+                    page_count += 1
+                    resources = page.get('ResourceTagMappingList', [])
+                    page_resource_count = len(resources)
+                    region_resources += page_resource_count
+                    total_resources += page_resource_count
                     
-                    if len(arn_parts) >= 4:
-                        service = arn_parts[2] if len(arn_parts) > 2 else 'unknown'
-                        region = arn_parts[3] if arn_parts[3] else 'global'
-                        
-                        # Extract EC2 resource type for detailed analysis
-                        resource_type = 'unknown'
-                        if service == 'ec2' and len(arn_parts) >= 6:
-                            # Format: arn:aws:ec2:region:account:resource-type/resource-id
-                            resource_type_part = arn_parts[5]
-                            if '/' in resource_type_part:
-                                resource_type = resource_type_part.split('/')[0]
+                    for resource in resources:
+                        resource_arn = resource.get('ResourceARN', '')
+                        if resource_arn:
+                            # Extract region from ARN format: arn:aws:service:region:account-id:resource
+                            arn_parts = resource_arn.split(':')
+                            
+                            if len(arn_parts) >= 4:
+                                service = arn_parts[2] if len(arn_parts) > 2 else 'unknown'
+                                region = arn_parts[3] if arn_parts[3] else 'global'
+                                
+                                # Special handling for S3: S3 ARNs don't include region
+                                # but we know the region from which API call we're making
+                                if service == 's3' and (not region or region == 'global'):
+                                    region = scan_region  # Use the region we're scanning from
+                                    print(f"      🪣 S3 resource mapped to region {scan_region}: {resource_arn}")
+                                
+                                # Special handling for other services that might not have region in ARN
+                                elif service in ['iam', 'cloudfront', 'route53'] and (not region or region == 'global'):
+                                    region = 'global'  # These are truly global services
+                                
+                                # Extract EC2 resource type for detailed analysis
+                                resource_type = 'unknown'
+                                if service == 'ec2' and len(arn_parts) >= 6:
+                                    # Format: arn:aws:ec2:region:account:resource-type/resource-id
+                                    resource_type_part = arn_parts[5]
+                                    if '/' in resource_type_part:
+                                        resource_type = resource_type_part.split('/')[0]
+                                    else:
+                                        resource_type = resource_type_part
+                                
+                                # Count resources by region, service, and EC2 type
+                                resource_count_by_region[region] = resource_count_by_region.get(region, 0) + 1
+                                resource_count_by_service[service] = resource_count_by_service.get(service, 0) + 1
+                                
+                                if service == 'ec2':
+                                    ec2_resource_types[resource_type] = ec2_resource_types.get(resource_type, 0) + 1
+                                
+                                # Only add non-empty regions to active regions (skip global services)
+                                if region and region != 'global':
+                                    active_regions.add(region)
+                                
+                                # Collect sample resources grouped by region (up to 10 per region)
+                                if region not in region_samples:
+                                    region_samples[region] = []
+                                
+                                if len(region_samples[region]) < 10:
+                                    region_samples[region].append({
+                                        'arn': resource_arn,
+                                        'service': service,
+                                        'region': region,
+                                        'resource_type': resource_type if service == 'ec2' else service,
+                                        'tags': len(resource.get('Tags', []))
+                                    })
+                                
+                                # Also keep overall samples for backward compatibility
+                                if len(sample_resources) < 50:
+                                    sample_resources.append({
+                                        'arn': resource_arn,
+                                        'service': service,
+                                        'region': region,
+                                        'resource_type': resource_type if service == 'ec2' else service,
+                                        'tags': len(resource.get('Tags', []))
+                                    })
                             else:
-                                resource_type = resource_type_part
-                        
-                        # Count resources by region, service, and EC2 type
-                        resource_count_by_region[region] = resource_count_by_region.get(region, 0) + 1
-                        resource_count_by_service[service] = resource_count_by_service.get(service, 0) + 1
-                        
-                        if service == 'ec2':
-                            ec2_resource_types[resource_type] = ec2_resource_types.get(resource_type, 0) + 1
-                        
-                        # Only add non-empty regions to active regions (skip global services)
-                        if region and region != 'global':
-                            active_regions.add(region)
-                        
-                        # Collect sample resources grouped by region (up to 10 per region)
-                        if region not in region_samples:
-                            region_samples[region] = []
-                        
-                        if len(region_samples[region]) < 10:
-                            region_samples[region].append({
-                                'arn': resource_arn,
-                                'service': service,
-                                'region': region,
-                                'resource_type': resource_type if service == 'ec2' else service,
-                                'tags': len(resource.get('Tags', []))
-                            })
-                        
-                        # Also keep overall samples for backward compatibility
-                        if len(sample_resources) < 50:
-                            sample_resources.append({
-                                'arn': resource_arn,
-                                'service': service,
-                                'region': region,
-                                'resource_type': resource_type if service == 'ec2' else service,
-                                'tags': len(resource.get('Tags', []))
-                            })
-                    else:
-                        print(f"    ⚠️  Invalid ARN format: {resource_arn}")
+                                print(f"      ⚠️  Invalid ARN format: {resource_arn}")
+                
+                if region_resources > 0:
+                    print(f"      ✅ Found {region_resources} tagged resources in {scan_region}")
+                else:
+                    print(f"      ⚪ No tagged resources in {scan_region}")
+                    
+            except Exception as e:
+                print(f"      ❌ Error scanning {scan_region}: {e}")
+                continue
         
         # Print detailed debugging information
         print(f"  📊 Region Detection Summary for Account {account_id}:")
@@ -465,15 +498,14 @@ def main():
                 try:
                     if account_id == org_account_id:
                         # For organization account, use the existing organization session
-                        account_tagging_client = tagging_client
+                        account_session = session
                         print(f" Using organization session for account {account_id} (management account)")
                     else:
                         # For member accounts, assume the member role using the organization session
                         account_session = assume_member_account_role(session, account_id, member_role_name)
-                        account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
                         print(f" Using member role {member_role_name} for account {account_id}")
                     
-                    active_regions = get_active_regions(account_tagging_client, account_id)
+                    active_regions = get_active_regions(account_session, account_id)
                     region_group, regions = map_regions_to_groups(active_regions)
                     
                     print(f" Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")

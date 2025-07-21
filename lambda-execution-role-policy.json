@@ -1,0 +1,49 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "CloudWatchLogs",
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ],
+            "Resource": "arn:aws:logs:*:*:*"
+        },
+        {
+            "Sid": "OrganizationsAccess",
+            "Effect": "Allow",
+            "Action": [
+                "organizations:DescribeOrganization",
+                "organizations:ListAccounts",
+                "organizations:ListTagsForResource"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "AssumeRoleInMemberAccounts",
+            "Effect": "Allow",
+            "Action": [
+                "sts:AssumeRole"
+            ],
+            "Resource": "arn:aws:iam::*:role/OrganizationAccountAccessRole"
+        },
+        {
+            "Sid": "S3Upload",
+            "Effect": "Allow",
+            "Action": [
+                "s3:PutObject"
+            ],
+            "Resource": "arn:aws:s3:::YOUR-LAMBDA-TAGS-TEST-BUCKET/*"
+        },
+        {
+            "Sid": "ResourceGroupsTaggingAPI",
+            "Effect": "Allow",
+            "Action": [
+                "resourcegroupstaggingapi:GetResources"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
