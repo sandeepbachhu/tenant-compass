@@ -55,7 +55,39 @@ def find_tag_value(tags_dict, tag_variations):
             return tags_dict[variation]
     return ''
 
-def get_active_regions(session, account_id):
+def get_active_regions(tagging_client, account_id):
+    """
+    Get active regions for an account by querying tagged resources.
+    
+    Args:
+        tagging_client: boto3 resourcegroupstaggingapi client
+        account_id (str): AWS account ID
+        
+    Returns:
+        list: Sorted list of active regions
+    """
+    active_regions = set()
+    
+    try:
+        paginator = tagging_client.get_paginator('get_resources')
+        
+        for page in paginator.paginate(ResourcesPerPage=50):
+            for resource in page.get('ResourceTagMappingList', []):
+                resource_arn = resource.get('ResourceARN', '')
+                if resource_arn:
+                    # Extract region from ARN format: arn:aws:service:region:account-id:resource
+                    arn_parts = resource_arn.split(':')
+                    if len(arn_parts) >= 4 and arn_parts[3]:
+                        region = arn_parts[3]
+                        active_regions.add(region)
+        
+        return sorted(list(active_regions))
+        
+    except Exception as e:
+        print(f"⚠️ Warning: Could not fetch active regions for account {account_id}: {e}")
+        return []
+
+def get_active_regions_multi_region(session, account_id):
     """
     Get active regions for an account by querying tagged resources across multiple regions.
     
@@ -498,23 +530,24 @@ def main():
                 try:
                     if account_id == org_account_id:
                         # For organization account, use the existing organization session
-                        account_session = session
-                        print(f" Using organization session for account {account_id} (management account)")
+                        account_tagging_client = tagging_client
+                        print(f"🌍 Using organization session for account {account_id} (management account)")
                     else:
                         # For member accounts, assume the member role using the organization session
                         account_session = assume_member_account_role(session, account_id, member_role_name)
-                        print(f" Using member role {member_role_name} for account {account_id}")
+                        account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
+                        print(f"🌍 Using member role {member_role_name} for account {account_id}")
                     
-                    active_regions = get_active_regions(account_session, account_id)
+                    active_regions = get_active_regions(account_tagging_client, account_id)
                     region_group, regions = map_regions_to_groups(active_regions)
                     
-                    print(f" Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
+                    print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     
                 except Exception as e:
                     if account_id == org_account_id:
-                        print(f" Warning: Could not determine active regions for organization account {account_id}: {e}")
+                        print(f"⚠️ Warning: Could not determine active regions for organization account {account_id}: {e}")
                     else:
-                        print(f" Warning: Could not determine active regions for member account {account_id} using role {member_role_name}: {e}")
+                        print(f"⚠️ Warning: Could not determine active regions for member account {account_id} using role {member_role_name}: {e}")
 
                 all_account_data.append({
                     "Account_ID": account_id,
