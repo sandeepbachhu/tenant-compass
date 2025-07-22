@@ -28,8 +28,10 @@ SAVE_LOCAL = True
 REGION_GROUPS = {
     "US": {"us-east-1", "us-east-2", "us-west-1", "us-west-2"},
     "UK": {"eu-west-2"},
-    "EU": {"eu-north-1", "eu-west-1"},
-    "BR": {"sa-east-1"}
+    "EU": {"eu-north-1", "eu-west-1", "eu-west-3", "eu-central-1"},
+    "BR": {"sa-east-1"},
+    "AP": {"ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "ap-northeast-2", "ap-northeast-3", "ap-south-1"},
+    "CA": {"ca-central-1"},
 }
 
 # Tag name variations for robust tag detection
@@ -98,12 +100,18 @@ def get_active_regions_multi_region(session, account_id):
     Returns:
         list: Sorted list of active regions
     """
-    # List of regions to scan - add more as needed
+    # List of regions to scan - includes all regions from REGION_GROUPS
     regions_to_scan = [
+        # US regions
         'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
-        'eu-west-1', 'eu-west-2', 'eu-central-1', 'eu-north-1',
-        'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1',
-        'ca-central-1', 'sa-east-1'
+        # EU regions
+        'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-north-1',
+        # AP regions
+        'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3', 'ap-south-1',
+        # CA regions
+        'ca-central-1',
+        # BR regions
+        'sa-east-1'
     ]
     
     active_regions = set()
@@ -335,35 +343,64 @@ def map_regions_to_groups(active_regions):
     Returns:
         tuple: (region_group, regions_string)
     """
+    print(f"  🔍 DEBUG map_regions_to_groups: Input active_regions = {active_regions}")
+    
     if not active_regions:
+        print(f"  🔍 DEBUG map_regions_to_groups: No active regions, returning empty")
         return '', ''
     
     # Find which region groups are represented
     active_groups = set()
     mapped_regions = []
+    unmapped_regions = []
+    
+    print(f"  🔍 DEBUG map_regions_to_groups: Available REGION_GROUPS = {REGION_GROUPS}")
     
     for region in active_regions:
+        print(f"  🔍 DEBUG map_regions_to_groups: Processing region '{region}'")
+        region_matched = False
+        
         for group_name, group_regions in REGION_GROUPS.items():
+            print(f"    🔍 Checking if '{region}' is in {group_name} group: {group_regions}")
             if region in group_regions:
+                print(f"    ✅ MATCH! '{region}' found in {group_name} group")
                 active_groups.add(group_name)
                 mapped_regions.append(region)
+                region_matched = True
                 break
+            else:
+                print(f"    ❌ No match: '{region}' not in {group_name}")
+        
+        if not region_matched:
+            print(f"    ⚠️ WARNING: Region '{region}' did not match any group!")
+            unmapped_regions.append(region)
+    
+    print(f"  🔍 DEBUG map_regions_to_groups: Final results:")
+    print(f"    • active_groups = {active_groups}")
+    print(f"    • mapped_regions = {mapped_regions}")
+    print(f"    • unmapped_regions = {unmapped_regions}")
     
     # If no regions match our defined groups, return empty
     if not mapped_regions:
+        print(f"  🔍 DEBUG map_regions_to_groups: No mapped regions, returning empty")
         return '', ''
     
     # Determine region group
     if len(active_groups) > 1:
         region_group = "multi"
+        print(f"  🔍 DEBUG map_regions_to_groups: Multiple groups detected, setting region_group = 'multi'")
     elif len(active_groups) == 1:
         region_group = list(active_groups)[0]
+        print(f"  🔍 DEBUG map_regions_to_groups: Single group detected, setting region_group = '{region_group}'")
     else:
         region_group = ''
+        print(f"  🔍 DEBUG map_regions_to_groups: No groups detected, setting region_group = ''")
     
     # Create comma-separated regions string
     regions_string = ','.join(sorted(mapped_regions))
+    print(f"  🔍 DEBUG map_regions_to_groups: Final regions_string = '{regions_string}'")
     
+    print(f"  🔍 DEBUG map_regions_to_groups: Returning ({region_group}, {regions_string})")
     return region_group, regions_string
 
 def assume_role_with_oidc(account_id, role_name, session_name="OIDCSession"):
