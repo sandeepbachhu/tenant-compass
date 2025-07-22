@@ -563,7 +563,7 @@ def main():
 
                 # Always add account data to CSV, even if region detection failed
                 print(f"📝 Adding account {account_id} ({account_name}) to CSV with regions: {regions}")
-                all_account_data.append({
+                account_data = {
                     "Account_ID": account_id,
                     "Account_Name": account_name,
                     "Org_ID": org_info['Id'],
@@ -575,19 +575,42 @@ def main():
                     "Tenant_ID": org_info['MasterAccountId'],
                     "Environment": env_value,
                     "Aide_ID": aide_id_value
-                })
+                }
+                
+                all_account_data.append(account_data)
+                print(f"✅ Account {account_id} added successfully. Total accounts in list: {len(all_account_data)}")
+                print(f"   Account data: {account_data}")
 
+            print(f"\n📊 Final account processing summary for Org {org_account_id}:")
+            print(f"   Total accounts processed: {len(member_accounts)}")
+            print(f"   Total accounts in all_account_data: {len(all_account_data)}")
+            
             if not all_account_data:
-                print(f" No member accounts found for Org {org_account_id}.")
+                print(f"❌ No member accounts found for Org {org_account_id}.")
                 continue
 
-            all_account_data.sort(key=lambda x: x['Account_ID'] != org_account_id)
+            # Log each account before sorting
+            print(f"📋 Accounts before sorting:")
+            for i, acc in enumerate(all_account_data):
+                print(f"   {i+1}. {acc['Account_ID']} ({acc['Account_Name']}) - Regions: {acc['Regions']}")
 
+            all_account_data.sort(key=lambda x: x['Account_ID'] != org_account_id)
+            
+            # Log each account after sorting
+            print(f"📋 Accounts after sorting:")
+            for i, acc in enumerate(all_account_data):
+                print(f"   {i+1}. {acc['Account_ID']} ({acc['Account_Name']}) - Regions: {acc['Regions']}")
+
+            print(f"📄 Starting CSV generation with {len(all_account_data)} accounts...")
             output = io.StringIO()
             writer = csv.DictWriter(output, fieldnames=all_account_data[0].keys())
             writer.writeheader()
-            for row in all_account_data:
+            
+            for i, row in enumerate(all_account_data):
+                print(f"   Writing row {i+1}: {row['Account_ID']} ({row['Account_Name']}) - Regions: {row['Regions']}")
                 writer.writerow(row)
+            
+            print(f"✅ CSV generation completed. CSV size: {len(output.getvalue())} characters")
 
             csv_key = f"{org_account_id}_aws_{org_account_name}_tc.csv"
             s3.put_object(Bucket=S3_BUCKET, Key=csv_key, Body=output.getvalue())
