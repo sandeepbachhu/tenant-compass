@@ -32,39 +32,247 @@ REGION_GROUPS = {
     "BR": {"sa-east-1"}
 }
 
+# Tag name variations for robust tag detection
+ENVIRONMENT_TAG_VARIATIONS = ['environment', 'Environment', 'ENVIRONMENT', 'env', 'Env', 'ENV']
+AIDE_ID_TAG_VARIATIONS = ['aide-id', 'AIDE_ID', 'AIDE-ID', 'aide_id', 'aideId', 'AideId']
+
 OUTPUT_DIR = pathlib.Path.home() / "aws-org-scripts-outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def get_active_regions(tagging_client, account_id):
+def find_tag_value(tags_dict, tag_variations):
     """
-    Get active regions for an account by querying tagged resources.
+    Find tag value by checking multiple tag name variations.
     
     Args:
-        tagging_client: boto3 resourcegroupstaggingapi client
+        tags_dict (dict): Dictionary of tag key-value pairs
+        tag_variations (list): List of tag name variations to check
+        
+    Returns:
+        str: Tag value if found, empty string otherwise
+    """
+    for variation in tag_variations:
+        if variation in tags_dict:
+            return tags_dict[variation]
+    return ''
+
+def get_active_regions(session, account_id):
+    """
+    Get active regions for an account by querying tagged resources across multiple regions.
+    
+    Args:
+        session: boto3 session for the account
         account_id (str): AWS account ID
         
     Returns:
         list: Sorted list of active regions
     """
+    # List of regions to scan - add more as needed
+    regions_to_scan = [
+        'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+        'eu-west-1', 'eu-west-2', 'eu-central-1', 'eu-north-1',
+        'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1',
+        'ca-central-1', 'sa-east-1'
+    ]
+    
     active_regions = set()
+    resource_count_by_region = {}
+    resource_count_by_service = {}
+    ec2_resource_types = {}
+    total_resources = 0
+    page_count = 0
+    sample_resources = []
+    region_samples = {}  # Group samples by region
     
     try:
-        paginator = tagging_client.get_paginator('get_resources')
+        print(f"  🔍 Starting region detection for account {account_id} across {len(regions_to_scan)} regions...")
         
-        for page in paginator.paginate(ResourcesPerPage=50):
-            for resource in page.get('ResourceTagMappingList', []):
-                resource_arn = resource.get('ResourceARN', '')
-                if resource_arn:
-                    # Extract region from ARN format: arn:aws:service:region:account-id:resource
-                    arn_parts = resource_arn.split(':')
-                    if len(arn_parts) >= 4 and arn_parts[3]:
-                        region = arn_parts[3]
-                        active_regions.add(region)
+        # Scan each region separately since the API is regional
+        for scan_region in regions_to_scan:
+            try:
+                print(f"    🌍 Checking region: {scan_region}")
+                tagging_client = session.client('resourcegroupstaggingapi', region_name=scan_region)
+                paginator = tagging_client.get_paginator('get_resources')
+                region_resources = 0
+                
+                for page in paginator.paginate(ResourcesPerPage=50):
+                    page_count += 1
+                    resources = page.get('ResourceTagMappingList', [])
+                    page_resource_count = len(resources)
+                    region_resources += page_resource_count
+                    total_resources += page_resource_count
+                    
+                    for resource in resources:
+                        resource_arn = resource.get('ResourceARN', '')
+                        if resource_arn:
+                            # Extract region from ARN format: arn:aws:service:region:account-id:resource
+                            arn_parts = resource_arn.split(':')
+                            
+                            if len(arn_parts) >= 4:
+                                service = arn_parts[2] if len(arn_parts) > 2 else 'unknown'
+                                region = arn_parts[3] if arn_parts[3] else 'global'
+                                
+                                # Special handling for S3: S3 ARNs don't include region
+                                # but we know the region from which API call we're making
+                                if service == 's3' and (not region or region == 'global'):
+                                    region = scan_region  # Use the region we're scanning from
+                                    print(f"      🪣 S3 resource mapped to region {scan_region}: {resource_arn}")
+                                
+                                # Special handling for other services that might not have region in ARN
+                                elif service in ['iam', 'cloudfront', 'route53'] and (not region or region == 'global'):
+                                    region = 'global'  # These are truly global services
+                                
+                                # Extract EC2 resource type for detailed analysis
+                                resource_type = 'unknown'
+                                if service == 'ec2' and len(arn_parts) >= 6:
+                                    # Format: arn:aws:ec2:region:account:resource-type/resource-id
+                                    resource_type_part = arn_parts[5]
+                                    if '/' in resource_type_part:
+                                        resource_type = resource_type_part.split('/')[0]
+                                    else:
+                                        resource_type = resource_type_part
+                                
+                                # Count resources by region, service, and EC2 type
+                                resource_count_by_region[region] = resource_count_by_region.get(region, 0) + 1
+                                resource_count_by_service[service] = resource_count_by_service.get(service, 0) + 1
+                                
+                                if service == 'ec2':
+                                    ec2_resource_types[resource_type] = ec2_resource_types.get(resource_type, 0) + 1
+                                
+                                # Only add non-empty regions to active regions (skip global services)
+                                if region and region != 'global':
+                                    active_regions.add(region)
+                                
+                                # Collect sample resources grouped by region (up to 10 per region)
+                                if region not in region_samples:
+                                    region_samples[region] = []
+                                
+                                if len(region_samples[region]) < 10:
+                                    region_samples[region].append({
+                                        'arn': resource_arn,
+                                        'service': service,
+                                        'region': region,
+                                        'resource_type': resource_type if service == 'ec2' else service,
+                                        'tags': len(resource.get('Tags', []))
+                                    })
+                                
+                                # Also keep overall samples for backward compatibility
+                                if len(sample_resources) < 50:
+                                    sample_resources.append({
+                                        'arn': resource_arn,
+                                        'service': service,
+                                        'region': region,
+                                        'resource_type': resource_type if service == 'ec2' else service,
+                                        'tags': len(resource.get('Tags', []))
+                                    })
+                            else:
+                                print(f"      ⚠️  Invalid ARN format: {resource_arn}")
+                
+                if region_resources > 0:
+                    print(f"      ✅ Found {region_resources} tagged resources in {scan_region}")
+                else:
+                    print(f"      ⚪ No tagged resources in {scan_region}")
+                    
+            except Exception as e:
+                print(f"      ❌ Error scanning {scan_region}: {e}")
+                continue
+        
+        # Print detailed debugging information
+        print(f"  📊 Region Detection Summary for Account {account_id}:")
+        print(f"    • Total pages processed: {page_count}")
+        print(f"    • Total tagged resources found: {total_resources}")
+        print(f"    • Active regions detected: {sorted(list(active_regions))}")
+        print(f"    • Resources by region: {dict(sorted(resource_count_by_region.items()))}")
+        print(f"    • Resources by service: {dict(sorted(resource_count_by_service.items()))}")
+        
+        # Print EC2 resource type breakdown with ALL ARNs
+        if ec2_resource_types:
+            print(f"  🏗️  EC2 Resource Types Breakdown:")
+            for resource_type, count in sorted(ec2_resource_types.items()):
+                print(f"    • {resource_type}: {count}")
+        
+        # Print ALL resources grouped by EC2 resource type (not just samples)
+        if ec2_resource_types:
+            print(f"  📋 ALL EC2 Resources by Type and Region:")
+            
+            # Collect all EC2 resources by type
+            ec2_resources_by_type = {}
+            
+            # Re-process all resources to collect EC2 resources by type
+            paginator = tagging_client.get_paginator('get_resources')
+            for page in paginator.paginate(ResourcesPerPage=50):
+                for resource in page.get('ResourceTagMappingList', []):
+                    resource_arn = resource.get('ResourceARN', '')
+                    if resource_arn and ':ec2:' in resource_arn:
+                        arn_parts = resource_arn.split(':')
+                        if len(arn_parts) >= 6:
+                            region = arn_parts[3] if arn_parts[3] else 'global'
+                            resource_type_part = arn_parts[5]
+                            resource_type = resource_type_part.split('/')[0] if '/' in resource_type_part else resource_type_part
+                            
+                            if resource_type not in ec2_resources_by_type:
+                                ec2_resources_by_type[resource_type] = []
+                            
+                            ec2_resources_by_type[resource_type].append({
+                                'arn': resource_arn,
+                                'region': region,
+                                'tags': len(resource.get('Tags', []))
+                            })
+            
+            # Print all resources for each type
+            for resource_type in sorted(ec2_resources_by_type.keys()):
+                resources = ec2_resources_by_type[resource_type]
+                print(f"    🔧 {resource_type.upper()} ({len(resources)} total):")
+                
+                # Group by region for this resource type
+                by_region = {}
+                for res in resources:
+                    region = res['region']
+                    if region not in by_region:
+                        by_region[region] = []
+                    by_region[region].append(res)
+                
+                # Print resources grouped by region
+                for region in sorted(by_region.keys()):
+                    region_resources = by_region[region]
+                    print(f"      🌍 {region} ({len(region_resources)} resources):")
+                    for i, res in enumerate(region_resources, 1):
+                        print(f"        {i:2d}. {res['tags']} tags | {res['arn']}")
+                print()  # Empty line between resource types
+        
+        # Print sample resources grouped by region (keep this for non-EC2 services)
+        print(f"  📋 Sample Resources by Region (All Services):")
+        for region in sorted(region_samples.keys()):
+            samples = region_samples[region]
+            print(f"    🌍 {region} ({len(samples)} samples shown):")
+            for i, res in enumerate(samples, 1):
+                resource_display = f"{res['resource_type']}" if res['service'] == 'ec2' else f"{res['service']}"
+                print(f"      {i:2d}. {resource_display:20} | {res['tags']} tags | {res['arn']}")
+        
+        # Special focus on us-west-2 if it exists
+        if 'us-west-2' in region_samples:
+            print(f"  🎯 FOUND US-WEST-2 RESOURCES! ({len(region_samples['us-west-2'])} samples)")
+            for i, res in enumerate(region_samples['us-west-2'], 1):
+                print(f"    {i}. {res['resource_type']:20} | {res['arn']}")
+        elif 'us-west-2' not in active_regions:
+            print(f"  ❌ NO US-WEST-2 RESOURCES FOUND in tagged resources")
+            print(f"     This means either:")
+            print(f"     • No resources in us-west-2 have tags")
+            print(f"     • VPCs and related resources in us-west-2 are untagged")
+        
+        if not active_regions:
+            print(f"  ⚠️  No active regions found - this could mean:")
+            print(f"      • No tagged resources exist in this account")
+            print(f"      • All resources are global services (no region in ARN)")
+            print(f"      • Permission issues with Resource Groups Tagging API")
         
         return sorted(list(active_regions))
         
     except Exception as e:
-        print(f"⚠️ Warning: Could not fetch active regions for account {account_id}: {e}")
+        print(f"  ❌ Error fetching active regions for account {account_id}: {e}")
+        print(f"     This could be due to:")
+        print(f"     • Missing 'tag:GetResources' permission")
+        print(f"     • Network connectivity issues")
+        print(f"     • API rate limiting")
         return []
 
 def map_regions_to_groups(active_regions):
@@ -191,7 +399,7 @@ def main():
     args = parser.parse_args()
     member_role_name = args.member_role
     
-    print(f"🔧 Using member account role: {member_role_name}")
+    print(f" Using member account role: {member_role_name}")
     
     # Validate required environment variables
     required_vars = ['OUTPUT_BUCKET', 'DYNAMO_TABLE_NAME', 'CROSS_ACCOUNT_OIDC_ROLE_NAME',
@@ -199,7 +407,7 @@ def main():
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
-        print(f"❌ Missing required environment variables: {', '.join(missing_vars)}")
+        print(f" Missing required environment variables: {', '.join(missing_vars)}")
         print("Please set these variables in your .env file or environment.")
         sys.exit(1)
 
@@ -221,11 +429,11 @@ def main():
             items = response.get('Items', [])
             tenant_ids.extend(item['tenant_id'] for item in items)
 
-        print(f"✅ Total active Cloud Usage tenant accounts found: {len(tenant_ids)}")
+        print(f" Total active Cloud Usage tenant accounts found: {len(tenant_ids)}")
         print("Tenant IDs:", tenant_ids)
 
     except Exception as e:
-        print(f"❌ Error scanning DynamoDB table: {e}")
+        print(f" Error scanning DynamoDB table: {e}")
         return
 
     s3 = boto3.client('s3', region_name=REGION)
@@ -233,7 +441,7 @@ def main():
 
     for org_account_id in tenant_ids:
         try:
-            print(f"\n➡️ Processing Org account: {org_account_id}")
+            print(f"\n Processing Org account: {org_account_id}")
             # Use OIDC authentication instead of direct role assumption
             session = assume_role_with_oidc(org_account_id, ROLE_NAME)
             org_client = session.client('organizations', region_name=REGION)
@@ -243,13 +451,13 @@ def main():
 
             org_info = org_client.describe_organization()['Organization']
             if org_info['MasterAccountId'] != org_account_id:
-                print(f"⏭️ Skipping {org_account_id}: Not a management account.")
+                print(f" Skipping {org_account_id}: Not a management account.")
                 continue
 
             member_accounts = []
             paginator = org_client.get_paginator('list_accounts')
             for page in paginator.paginate():
-                print(f"🔄 Fetched {len(page['Accounts'])} accounts from paginator")
+                print(f" Fetched {len(page['Accounts'])} accounts from paginator")
                 member_accounts.extend(page['Accounts'])
 
 
@@ -259,10 +467,10 @@ def main():
                 raw_org_name = mgmt_account['Name']
                 org_account_name = re.sub(r'[^A-Za-z0-9-]+', '-', raw_org_name).strip('-')
             except Exception as e:
-                print(f"⚠️ Warning: Could not fetch name for Org account {org_account_id}: {e}")
+                print(f" Warning: Could not fetch name for Org account {org_account_id}: {e}")
                 org_account_name = "unknown"
 
-            print(f"📋 Total member accounts in org {org_account_id}: {len(member_accounts)}")
+            print(f" Total member accounts in org {org_account_id}: {len(member_accounts)}")
 
             all_account_data = []
             for account in member_accounts:
@@ -274,11 +482,15 @@ def main():
                 aide_id_value = ''
                 try:
                     tags_response = org_client.list_tags_for_resource(ResourceId=account_id)
-                    tags = {tag['Key'].lower(): tag['Value'] for tag in tags_response.get('Tags', [])}
-                    env_value = tags.get('environment', '')
-                    aide_id_value = tags.get('aide-id', '')
+                    # Keep original tag keys (don't convert to lowercase) for robust tag detection
+                    tags = {tag['Key']: tag['Value'] for tag in tags_response.get('Tags', [])}
+                    
+                    # Use helper function to find tag values by checking multiple variations
+                    env_value = find_tag_value(tags, ENVIRONMENT_TAG_VARIATIONS)
+                    aide_id_value = find_tag_value(tags, AIDE_ID_TAG_VARIATIONS)
+                    
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not fetch tags for account {account_id}: {e}")
+                    print(f" Warning: Could not fetch tags for account {account_id}: {e}")
 
                 # Get active regions and map to region groups
                 region_group = ''
@@ -286,24 +498,23 @@ def main():
                 try:
                     if account_id == org_account_id:
                         # For organization account, use the existing organization session
-                        account_tagging_client = tagging_client
-                        print(f"🌍 Using organization session for account {account_id} (management account)")
+                        account_session = session
+                        print(f" Using organization session for account {account_id} (management account)")
                     else:
                         # For member accounts, assume the member role using the organization session
                         account_session = assume_member_account_role(session, account_id, member_role_name)
-                        account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
-                        print(f"🌍 Using member role {member_role_name} for account {account_id}")
+                        print(f" Using member role {member_role_name} for account {account_id}")
                     
-                    active_regions = get_active_regions(account_tagging_client, account_id)
+                    active_regions = get_active_regions(account_session, account_id)
                     region_group, regions = map_regions_to_groups(active_regions)
                     
-                    print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
+                    print(f" Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     
                 except Exception as e:
                     if account_id == org_account_id:
-                        print(f"⚠️ Warning: Could not determine active regions for organization account {account_id}: {e}")
+                        print(f" Warning: Could not determine active regions for organization account {account_id}: {e}")
                     else:
-                        print(f"⚠️ Warning: Could not determine active regions for member account {account_id} using role {member_role_name}: {e}")
+                        print(f" Warning: Could not determine active regions for member account {account_id} using role {member_role_name}: {e}")
 
                 all_account_data.append({
                     "Account_ID": account_id,
@@ -320,7 +531,7 @@ def main():
                 })
 
             if not all_account_data:
-                print(f"❌ No member accounts found for Org {org_account_id}.")
+                print(f" No member accounts found for Org {org_account_id}.")
                 continue
 
             all_account_data.sort(key=lambda x: x['Account_ID'] != org_account_id)
@@ -333,17 +544,17 @@ def main():
 
             csv_key = f"{org_account_id}_aws_{org_account_name}_tc.csv"
             s3.put_object(Bucket=S3_BUCKET, Key=csv_key, Body=output.getvalue())
-            print(f"✅ Uploaded metadata for Org {org_account_id} to S3: {csv_key}")
+            print(f" Uploaded metadata for Org {org_account_id} to S3: {csv_key}")
 
             # Save to local file system (optional)
             if SAVE_LOCAL:
                 local_path = OUTPUT_DIR / csv_key
                 with open(local_path, 'w') as f:
                     f.write(output.getvalue())
-                print(f"📁 Saved local backup at: {local_path}")
+                print(f" Saved local backup at: {local_path}")
 
         except Exception as e:
-            print(f"❌ Skipping Org account {org_account_id} due to error: {e}")
+            print(f" Skipping Org account {org_account_id} due to error: {e}")
 
 if __name__ == '__main__':
     main()

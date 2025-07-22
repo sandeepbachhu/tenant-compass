@@ -544,7 +544,14 @@ def main():
                             account_tagging_client = None
                     
                     if account_tagging_client:
-                        active_regions = get_active_regions(account_tagging_client, account_id)
+                        # Use the session for multi-region scanning instead of single tagging_client
+                        if account_id == org_account_id:
+                            # For organization account, use the main session
+                            active_regions = get_active_regions_multi_region(session, account_id)
+                        else:
+                            # For member accounts, use the member account session
+                            active_regions = get_active_regions_multi_region(account_session, account_id)
+                        
                         region_group, regions = map_regions_to_groups(active_regions)
                         print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     else:
