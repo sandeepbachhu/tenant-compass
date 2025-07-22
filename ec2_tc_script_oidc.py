@@ -86,7 +86,7 @@ def get_active_regions(tagging_client, account_id):
         return sorted(list(active_regions))
         
     except Exception as e:
-        print(f"⚠️ Warning: Could not fetch active regions for account {account_id}: {e}")
+        print(f" Warning: Could not fetch active regions for account {account_id}: {e}")
         return []
 
 def get_active_regions_multi_region(session, account_id):
@@ -124,12 +124,12 @@ def get_active_regions_multi_region(session, account_id):
     region_samples = {}  # Group samples by region
     
     try:
-        print(f"  🔍 Starting region detection for account {account_id} across {len(regions_to_scan)} regions...")
+        print(f"   Starting region detection for account {account_id} across {len(regions_to_scan)} regions...")
         
         # Scan each region separately since the API is regional
         for scan_region in regions_to_scan:
             try:
-                print(f"    🌍 Checking region: {scan_region}")
+                print(f"     Checking region: {scan_region}")
                 tagging_client = session.client('resourcegroupstaggingapi', region_name=scan_region)
                 paginator = tagging_client.get_paginator('get_resources')
                 region_resources = 0
@@ -205,19 +205,19 @@ def get_active_regions_multi_region(session, account_id):
                                         'tags': len(resource.get('Tags', []))
                                     })
                             else:
-                                print(f"      ⚠️  Invalid ARN format: {resource_arn}")
+                                print(f"        Invalid ARN format: {resource_arn}")
                 
                 if region_resources > 0:
-                    print(f"      ✅ Found {region_resources} tagged resources in {scan_region}")
+                    print(f"       Found {region_resources} tagged resources in {scan_region}")
                 else:
-                    print(f"      ⚪ No tagged resources in {scan_region}")
+                    print(f"       No tagged resources in {scan_region}")
                     
             except Exception as e:
-                print(f"      ❌ Error scanning {scan_region}: {e}")
+                print(f"       Error scanning {scan_region}: {e}")
                 continue
         
         # Print detailed debugging information
-        print(f"  📊 Region Detection Summary for Account {account_id}:")
+        print(f"   Region Detection Summary for Account {account_id}:")
         print(f"    • Total pages processed: {page_count}")
         print(f"    • Total tagged resources found: {total_resources}")
         print(f"    • Active regions detected: {sorted(list(active_regions))}")
@@ -226,7 +226,7 @@ def get_active_regions_multi_region(session, account_id):
         
         # Print EC2 resource type breakdown with ALL ARNs
         if ec2_resource_types:
-            print(f"  🏗️  EC2 Resource Types Breakdown:")
+            print(f"    EC2 Resource Types Breakdown:")
             for resource_type, count in sorted(ec2_resource_types.items()):
                 print(f"    • {resource_type}: {count}")
         
@@ -234,7 +234,7 @@ def get_active_regions_multi_region(session, account_id):
         # Wrap this in try-catch to prevent SCP errors from breaking the main function
         try:
             if ec2_resource_types:
-                print(f"  📋 ALL EC2 Resources by Type and Region:")
+                print(f"   ALL EC2 Resources by Type and Region:")
                 
                 # Use a working client from us-east-1 for detailed processing
                 working_client = session.client('resourcegroupstaggingapi', region_name='us-east-1')
@@ -266,7 +266,7 @@ def get_active_regions_multi_region(session, account_id):
                 # Print all resources for each type
                 for resource_type in sorted(ec2_resources_by_type.keys()):
                     resources = ec2_resources_by_type[resource_type]
-                    print(f"    🔧 {resource_type.upper()} ({len(resources)} total):")
+                    print(f"     {resource_type.upper()} ({len(resources)} total):")
                     
                     # Group by region for this resource type
                     by_region = {}
@@ -279,58 +279,58 @@ def get_active_regions_multi_region(session, account_id):
                     # Print resources grouped by region
                     for region in sorted(by_region.keys()):
                         region_resources = by_region[region]
-                        print(f"      🌍 {region} ({len(region_resources)} resources):")
+                        print(f"       {region} ({len(region_resources)} resources):")
                         for i, res in enumerate(region_resources, 1):
                             print(f"        {i:2d}. {res['tags']} tags | {res['arn']}")
                     print()  # Empty line between resource types
         except Exception as ec2_error:
-            print(f"  ⚠️ Warning: Could not process detailed EC2 resources: {ec2_error}")
+            print(f"   Warning: Could not process detailed EC2 resources: {ec2_error}")
             print(f"     This doesn't affect region detection - continuing...")
         
         # Print sample resources grouped by region (keep this for non-EC2 services)
-        print(f"  📋 Sample Resources by Region (All Services):")
+        print(f"   Sample Resources by Region (All Services):")
         for region in sorted(region_samples.keys()):
             samples = region_samples[region]
-            print(f"    🌍 {region} ({len(samples)} samples shown):")
+            print(f"     {region} ({len(samples)} samples shown):")
             for i, res in enumerate(samples, 1):
                 resource_display = f"{res['resource_type']}" if res['service'] == 'ec2' else f"{res['service']}"
                 print(f"      {i:2d}. {resource_display:20} | {res['tags']} tags | {res['arn']}")
         
         # Special focus on us-west-2 if it exists
         if 'us-west-2' in region_samples:
-            print(f"  🎯 FOUND US-WEST-2 RESOURCES! ({len(region_samples['us-west-2'])} samples)")
+            print(f"   FOUND US-WEST-2 RESOURCES! ({len(region_samples['us-west-2'])} samples)")
             for i, res in enumerate(region_samples['us-west-2'], 1):
                 print(f"    {i}. {res['resource_type']:20} | {res['arn']}")
         elif 'us-west-2' not in active_regions:
-            print(f"  ❌ NO US-WEST-2 RESOURCES FOUND in tagged resources")
+            print(f"   NO US-WEST-2 RESOURCES FOUND in tagged resources")
             print(f"     This means either:")
             print(f"     • No resources in us-west-2 have tags")
             print(f"     • VPCs and related resources in us-west-2 are untagged")
         
         # DEBUG: Check what we're about to return
-        print(f"  🔍 DEBUG: About to return active_regions: {sorted(list(active_regions))}")
-        print(f"  🔍 DEBUG: active_regions set contains: {active_regions}")
-        print(f"  🔍 DEBUG: Length of active_regions: {len(active_regions)}")
+        print(f"   DEBUG: About to return active_regions: {sorted(list(active_regions))}")
+        print(f"   DEBUG: active_regions set contains: {active_regions}")
+        print(f"   DEBUG: Length of active_regions: {len(active_regions)}")
         
         if not active_regions:
-            print(f"  ⚠️  No active regions found - this could mean:")
+            print(f"    No active regions found - this could mean:")
             print(f"      • No tagged resources exist in this account")
             print(f"      • All resources are global services (no region in ARN)")
             print(f"      • Permission issues with Resource Groups Tagging API")
         else:
-            print(f"  ✅ SUCCESS: Found {len(active_regions)} active regions: {sorted(list(active_regions))}")
+            print(f"   SUCCESS: Found {len(active_regions)} active regions: {sorted(list(active_regions))}")
         
         final_result = sorted(list(active_regions))
-        print(f"  🔍 DEBUG: Final result being returned: {final_result}")
+        print(f"   DEBUG: Final result being returned: {final_result}")
         return final_result
         
     except Exception as e:
-        print(f"  ❌ Error fetching active regions for account {account_id}: {e}")
+        print(f"   Error fetching active regions for account {account_id}: {e}")
         print(f"     This could be due to:")
         print(f"     • Missing 'tag:GetResources' permission")
         print(f"     • Network connectivity issues")
         print(f"     • API rate limiting")
-        print(f"  🔍 DEBUG: Exception occurred, returning empty list")
+        print(f"   DEBUG: Exception occurred, returning empty list")
         return []
 
 def map_regions_to_groups(active_regions):
@@ -343,10 +343,10 @@ def map_regions_to_groups(active_regions):
     Returns:
         tuple: (region_group, regions_string)
     """
-    print(f"  🔍 DEBUG map_regions_to_groups: Input active_regions = {active_regions}")
+    print(f"   DEBUG map_regions_to_groups: Input active_regions = {active_regions}")
     
     if not active_regions:
-        print(f"  🔍 DEBUG map_regions_to_groups: No active regions, returning empty")
+        print(f"   DEBUG map_regions_to_groups: No active regions, returning empty")
         return '', ''
     
     # Find which region groups are represented
@@ -354,53 +354,53 @@ def map_regions_to_groups(active_regions):
     mapped_regions = []
     unmapped_regions = []
     
-    print(f"  🔍 DEBUG map_regions_to_groups: Available REGION_GROUPS = {REGION_GROUPS}")
+    print(f"   DEBUG map_regions_to_groups: Available REGION_GROUPS = {REGION_GROUPS}")
     
     for region in active_regions:
-        print(f"  🔍 DEBUG map_regions_to_groups: Processing region '{region}'")
+        print(f"   DEBUG map_regions_to_groups: Processing region '{region}'")
         region_matched = False
         
         for group_name, group_regions in REGION_GROUPS.items():
-            print(f"    🔍 Checking if '{region}' is in {group_name} group: {group_regions}")
+            print(f"     Checking if '{region}' is in {group_name} group: {group_regions}")
             if region in group_regions:
-                print(f"    ✅ MATCH! '{region}' found in {group_name} group")
+                print(f"     MATCH! '{region}' found in {group_name} group")
                 active_groups.add(group_name)
                 mapped_regions.append(region)
                 region_matched = True
                 break
             else:
-                print(f"    ❌ No match: '{region}' not in {group_name}")
+                print(f"     No match: '{region}' not in {group_name}")
         
         if not region_matched:
-            print(f"    ⚠️ WARNING: Region '{region}' did not match any group!")
+            print(f"     WARNING: Region '{region}' did not match any group!")
             unmapped_regions.append(region)
     
-    print(f"  🔍 DEBUG map_regions_to_groups: Final results:")
+    print(f"   DEBUG map_regions_to_groups: Final results:")
     print(f"    • active_groups = {active_groups}")
     print(f"    • mapped_regions = {mapped_regions}")
     print(f"    • unmapped_regions = {unmapped_regions}")
     
     # If no regions match our defined groups, return empty
     if not mapped_regions:
-        print(f"  🔍 DEBUG map_regions_to_groups: No mapped regions, returning empty")
+        print(f"   DEBUG map_regions_to_groups: No mapped regions, returning empty")
         return '', ''
     
     # Determine region group
     if len(active_groups) > 1:
         region_group = "multi"
-        print(f"  🔍 DEBUG map_regions_to_groups: Multiple groups detected, setting region_group = 'multi'")
+        print(f"   DEBUG map_regions_to_groups: Multiple groups detected, setting region_group = 'multi'")
     elif len(active_groups) == 1:
         region_group = list(active_groups)[0]
-        print(f"  🔍 DEBUG map_regions_to_groups: Single group detected, setting region_group = '{region_group}'")
+        print(f"   DEBUG map_regions_to_groups: Single group detected, setting region_group = '{region_group}'")
     else:
         region_group = ''
-        print(f"  🔍 DEBUG map_regions_to_groups: No groups detected, setting region_group = ''")
+        print(f"   DEBUG map_regions_to_groups: No groups detected, setting region_group = ''")
     
     # Create comma-separated regions string
     regions_string = ','.join(sorted(mapped_regions))
-    print(f"  🔍 DEBUG map_regions_to_groups: Final regions_string = '{regions_string}'")
+    print(f"   DEBUG map_regions_to_groups: Final regions_string = '{regions_string}'")
     
-    print(f"  🔍 DEBUG map_regions_to_groups: Returning ({region_group}, {regions_string})")
+    print(f"   DEBUG map_regions_to_groups: Returning ({region_group}, {regions_string})")
     return region_group, regions_string
 
 def assume_role_with_oidc(account_id, role_name, session_name="OIDCSession"):
@@ -589,15 +589,15 @@ def main():
                         # For organization account, use the existing organization session
                         account_tagging_client = tagging_client
                         account_session = session  # Use main session for org account
-                        print(f"🌍 Using organization session for account {account_id} (management account)")
+                        print(f" Using organization session for account {account_id} (management account)")
                     else:
                         # For member accounts, assume the member role using the organization session
                         try:
                             account_session = assume_member_account_role(session, account_id, member_role_name)
                             account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
-                            print(f"🌍 Using member role {member_role_name} for account {account_id}")
+                            print(f" Using member role {member_role_name} for account {account_id}")
                         except Exception as role_error:
-                            print(f"❌ Failed to assume role {member_role_name} in account {account_id}: {role_error}")
+                            print(f" Failed to assume role {member_role_name} in account {account_id}: {role_error}")
                             # Set both to None to skip region detection
                             account_tagging_client = None
                             account_session = None
@@ -606,18 +606,18 @@ def main():
                         # Use the session for multi-region scanning
                         active_regions = get_active_regions_multi_region(account_session, account_id)
                         region_group, regions = map_regions_to_groups(active_regions)
-                        print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
+                        print(f" Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     else:
-                        print(f"⚠️ Skipping region detection for account {account_id} due to role assumption failure")
+                        print(f" Skipping region detection for account {account_id} due to role assumption failure")
                     
                 except Exception as e:
                     if account_id == org_account_id:
-                        print(f"⚠️ Warning: Could not determine active regions for organization account {account_id}: {e}")
+                        print(f" Warning: Could not determine active regions for organization account {account_id}: {e}")
                     else:
-                        print(f"⚠️ Warning: Could not determine active regions for member account {account_id}: {e}")
+                        print(f" Warning: Could not determine active regions for member account {account_id}: {e}")
 
                 # Always add account data to CSV, even if region detection failed
-                print(f"📝 Adding account {account_id} ({account_name}) to CSV with regions: {regions}")
+                print(f" Adding account {account_id} ({account_name}) to CSV with regions: {regions}")
                 account_data = {
                     "Account_ID": account_id,
                     "Account_Name": account_name,
@@ -633,30 +633,30 @@ def main():
                 }
                 
                 all_account_data.append(account_data)
-                print(f"✅ Account {account_id} added successfully. Total accounts in list: {len(all_account_data)}")
+                print(f" Account {account_id} added successfully. Total accounts in list: {len(all_account_data)}")
                 print(f"   Account data: {account_data}")
 
-            print(f"\n📊 Final account processing summary for Org {org_account_id}:")
+            print(f"\n Final account processing summary for Org {org_account_id}:")
             print(f"   Total accounts processed: {len(member_accounts)}")
             print(f"   Total accounts in all_account_data: {len(all_account_data)}")
             
             if not all_account_data:
-                print(f"❌ No member accounts found for Org {org_account_id}.")
+                print(f" No member accounts found for Org {org_account_id}.")
                 continue
 
-            # Log each account before sorting
-            print(f"📋 Accounts before sorting:")
-            for i, acc in enumerate(all_account_data):
-                print(f"   {i+1}. {acc['Account_ID']} ({acc['Account_Name']}) - Regions: {acc['Regions']}")
+            # # Log each account before sorting
+            # print(f" Accounts before sorting:")
+            # for i, acc in enumerate(all_account_data):
+            #     print(f"   {i+1}. {acc['Account_ID']} ({acc['Account_Name']}) - Regions: {acc['Regions']}")
 
-            all_account_data.sort(key=lambda x: x['Account_ID'] != org_account_id)
+            # all_account_data.sort(key=lambda x: x['Account_ID'] != org_account_id)
             
-            # Log each account after sorting
-            print(f"📋 Accounts after sorting:")
-            for i, acc in enumerate(all_account_data):
-                print(f"   {i+1}. {acc['Account_ID']} ({acc['Account_Name']}) - Regions: {acc['Regions']}")
+            # # Log each account after sorting
+            # print(f" Accounts after sorting:")
+            # for i, acc in enumerate(all_account_data):
+            #     print(f"   {i+1}. {acc['Account_ID']} ({acc['Account_Name']}) - Regions: {acc['Regions']}")
 
-            print(f"📄 Starting CSV generation with {len(all_account_data)} accounts...")
+            print(f" Starting CSV generation with {len(all_account_data)} accounts...")
             output = io.StringIO()
             writer = csv.DictWriter(output, fieldnames=all_account_data[0].keys())
             writer.writeheader()
@@ -665,7 +665,7 @@ def main():
                 print(f"   Writing row {i+1}: {row['Account_ID']} ({row['Account_Name']}) - Regions: {row['Regions']}")
                 writer.writerow(row)
             
-            print(f"✅ CSV generation completed. CSV size: {len(output.getvalue())} characters")
+            print(f" CSV generation completed. CSV size: {len(output.getvalue())} characters")
 
             csv_key = f"{org_account_id}_aws_{org_account_name}_tc.csv"
             s3.put_object(Bucket=S3_BUCKET, Key=csv_key, Body=output.getvalue())
