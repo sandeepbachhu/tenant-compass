@@ -527,10 +527,13 @@ def main():
                 # Get active regions and map to region groups
                 region_group = ''
                 regions = ''
+                account_session = None  # Initialize to avoid scope issues
+                
                 try:
                     if account_id == org_account_id:
                         # For organization account, use the existing organization session
                         account_tagging_client = tagging_client
+                        account_session = session  # Use main session for org account
                         print(f"🌍 Using organization session for account {account_id} (management account)")
                     else:
                         # For member accounts, assume the member role using the organization session
@@ -540,18 +543,13 @@ def main():
                             print(f"🌍 Using member role {member_role_name} for account {account_id}")
                         except Exception as role_error:
                             print(f"❌ Failed to assume role {member_role_name} in account {account_id}: {role_error}")
-                            # Set account_tagging_client to None to skip region detection
+                            # Set both to None to skip region detection
                             account_tagging_client = None
+                            account_session = None
                     
-                    if account_tagging_client:
-                        # Use the session for multi-region scanning instead of single tagging_client
-                        if account_id == org_account_id:
-                            # For organization account, use the main session
-                            active_regions = get_active_regions_multi_region(session, account_id)
-                        else:
-                            # For member accounts, use the member account session
-                            active_regions = get_active_regions_multi_region(account_session, account_id)
-                        
+                    if account_tagging_client and account_session:
+                        # Use the session for multi-region scanning
+                        active_regions = get_active_regions_multi_region(account_session, account_id)
                         region_group, regions = map_regions_to_groups(active_regions)
                         print(f"🌍 Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     else:
