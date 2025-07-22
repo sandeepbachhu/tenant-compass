@@ -291,13 +291,22 @@ def get_active_regions_multi_region(session, account_id):
             print(f"     • No resources in us-west-2 have tags")
             print(f"     • VPCs and related resources in us-west-2 are untagged")
         
+        # DEBUG: Check what we're about to return
+        print(f"  🔍 DEBUG: About to return active_regions: {sorted(list(active_regions))}")
+        print(f"  🔍 DEBUG: active_regions set contains: {active_regions}")
+        print(f"  🔍 DEBUG: Length of active_regions: {len(active_regions)}")
+        
         if not active_regions:
             print(f"  ⚠️  No active regions found - this could mean:")
             print(f"      • No tagged resources exist in this account")
             print(f"      • All resources are global services (no region in ARN)")
             print(f"      • Permission issues with Resource Groups Tagging API")
+        else:
+            print(f"  ✅ SUCCESS: Found {len(active_regions)} active regions: {sorted(list(active_regions))}")
         
-        return sorted(list(active_regions))
+        final_result = sorted(list(active_regions))
+        print(f"  🔍 DEBUG: Final result being returned: {final_result}")
+        return final_result
         
     except Exception as e:
         print(f"  ❌ Error fetching active regions for account {account_id}: {e}")
@@ -305,6 +314,7 @@ def get_active_regions_multi_region(session, account_id):
         print(f"     • Missing 'tag:GetResources' permission")
         print(f"     • Network connectivity issues")
         print(f"     • API rate limiting")
+        print(f"  🔍 DEBUG: Exception occurred, returning empty list")
         return []
 
 def map_regions_to_groups(active_regions):
