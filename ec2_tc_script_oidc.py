@@ -34,6 +34,10 @@ REGION_GROUPS = {
     "CA": {"ca-central-1"},
 }
 
+# Cloud 2.0 Organization Configuration
+CLOUD2_ORG_ACCOUNT_ID = "123456789"  # Replace with actual org account ID
+CLOUD2_MEMBER_ROLE_NAME = "xyz-tenant-compass-member-role"  # Replace with actual prefixed role name
+
 # Tag name variations for robust tag detection
 ENVIRONMENT_TAG_VARIATIONS = ['environment', 'Environment', 'ENVIRONMENT', 'env', 'Env', 'ENV']
 AIDE_ID_TAG_VARIATIONS = ['aide-id', 'AIDE_ID', 'AIDE-ID', 'aide_id', 'aideId', 'AideId']
@@ -56,6 +60,21 @@ def find_tag_value(tags_dict, tag_variations):
         if variation in tags_dict:
             return tags_dict[variation]
     return ''
+
+def get_member_role_for_org(org_account_id, default_member_role):
+    """
+    Determine which member role to use based on the organization account ID.
+    
+    Args:
+        org_account_id (str): AWS organization account ID
+        default_member_role (str): Default member role name
+        
+    Returns:
+        str: Member role name to use for this organization
+    """
+    if org_account_id == CLOUD2_ORG_ACCOUNT_ID:
+        return CLOUD2_MEMBER_ROLE_NAME
+    return default_member_role
 
 def get_active_regions(tagging_client, account_id):
     """
@@ -529,6 +548,11 @@ def main():
     for org_account_id in tenant_ids:
         try:
             print(f"\n Processing Org account: {org_account_id}")
+            
+            # Determine which member role to use for this organization
+            actual_member_role = get_member_role_for_org(org_account_id, member_role_name)
+            print(f" Using member role '{actual_member_role}' for organization {org_account_id}")
+            
             # Use OIDC authentication instead of direct role assumption
             session = assume_role_with_oidc(org_account_id, ROLE_NAME)
             org_client = session.client('organizations', region_name=REGION)
@@ -593,11 +617,11 @@ def main():
                     else:
                         # For member accounts, assume the member role using the organization session
                         try:
-                            account_session = assume_member_account_role(session, account_id, member_role_name)
+                            account_session = assume_member_account_role(session, account_id, actual_member_role)
                             account_tagging_client = account_session.client('resourcegroupstaggingapi', region_name=REGION)
-                            print(f" Using member role {member_role_name} for account {account_id}")
+                            print(f" Using member role {actual_member_role} for account {account_id}")
                         except Exception as role_error:
-                            print(f" Failed to assume role {member_role_name} in account {account_id}: {role_error}")
+                            print(f" Failed to assume role {actual_member_role} in account {account_id}: {role_error}")
                             # Set both to None to skip region detection
                             account_tagging_client = None
                             account_session = None
