@@ -57,6 +57,105 @@ def find_tag_value(tags_dict, tag_variations):
             return tags_dict[variation]
     return ''
 
+def get_active_regions_fast(session, account_id, verbose=False):
+    """
+    Get active regions for an account using optimized early-exit region detection.
+    
+    Args:
+        session: boto3 session for the account
+        account_id (str): AWS account ID
+        verbose (bool): Enable verbose logging and detailed analysis
+        
+    Returns:
+        list: Sorted list of active regions
+    """
+    # List of regions to scan - includes all regions from REGION_GROUPS
+    regions_to_scan = [
+        # US regions
+        'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+        # EU regions
+        'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-north-1',
+        # AP regions
+        'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3', 'ap-south-1',
+        # CA regions
+        'ca-central-1',
+        # BR regions
+        'sa-east-1'
+    ]
+    
+    active_regions = set()
+    
+    try:
+        if verbose:
+            print(f"   Starting region detection for account {account_id} across {len(regions_to_scan)} regions...")
+        
+        # Scan each region separately since the API is regional
+        for scan_region in regions_to_scan:
+            try:
+                if verbose:
+                    print(f"     Checking region: {scan_region}")
+                
+                tagging_client = session.client('resourcegroupstaggingapi', region_name=scan_region)
+                paginator = tagging_client.get_paginator('get_resources')
+                
+                # Early exit: Stop at first page with resources
+                for page in paginator.paginate(ResourcesPerPage=50):
+                    resources = page.get('ResourceTagMappingList', [])
+                    
+                    if resources:
+                        # Found at least one tagged resource - region is active
+                        for resource in resources:
+                            resource_arn = resource.get('ResourceARN', '')
+                            if resource_arn:
+                                # Extract region from ARN format: arn:aws:service:region:account-id:resource
+                                arn_parts = resource_arn.split(':')
+                                
+                                if len(arn_parts) >= 4:
+                                    service = arn_parts[2] if len(arn_parts) > 2 else 'unknown'
+                                    region = arn_parts[3] if arn_parts[3] else 'global'
+                                    
+                                    # Special handling for S3: S3 ARNs don't include region
+                                    if service == 's3' and (not region or region == 'global'):
+                                        region = scan_region
+                                    
+                                    # Special handling for global services
+                                    elif service in ['iam', 'cloudfront', 'route53'] and (not region or region == 'global'):
+                                        region = 'global'
+                                    
+                                    # Only add non-empty regions to active regions (skip global services)
+                                    if region and region != 'global':
+                                        active_regions.add(region)
+                        
+                        if verbose:
+                            print(f"       ✓ Found {len(resources)} tagged resources in {scan_region}")
+                        
+                        # Early exit - we confirmed this region is active
+                        break
+                    else:
+                        # No resources in this page, continue to next page
+                        continue
+                else:
+                    # No resources found in any page for this region
+                    if verbose:
+                        print(f"       - No tagged resources in {scan_region}")
+                    
+            except Exception as e:
+                if verbose:
+                    print(f"       Error scanning {scan_region}: {e}")
+                continue
+        
+        final_result = sorted(list(active_regions))
+        
+        if verbose:
+            print(f"   Region Detection Summary for Account {account_id}:")
+            print(f"    • Active regions detected: {final_result}")
+        
+        return final_result
+        
+    except Exception as e:
+        print(f"   Error fetching active regions for account {account_id}: {e}")
+        return []
+
 def get_active_regions(tagging_client, account_id):
     """
     Get active regions for an account by querying tagged resources.
@@ -343,64 +442,35 @@ def map_regions_to_groups(active_regions):
     Returns:
         tuple: (region_group, regions_string)
     """
-    print(f"   DEBUG map_regions_to_groups: Input active_regions = {active_regions}")
-    
     if not active_regions:
-        print(f"   DEBUG map_regions_to_groups: No active regions, returning empty")
         return '', ''
     
     # Find which region groups are represented
     active_groups = set()
     mapped_regions = []
-    unmapped_regions = []
-    
-    print(f"   DEBUG map_regions_to_groups: Available REGION_GROUPS = {REGION_GROUPS}")
     
     for region in active_regions:
-        print(f"   DEBUG map_regions_to_groups: Processing region '{region}'")
-        region_matched = False
-        
         for group_name, group_regions in REGION_GROUPS.items():
-            print(f"     Checking if '{region}' is in {group_name} group: {group_regions}")
             if region in group_regions:
-                print(f"     MATCH! '{region}' found in {group_name} group")
                 active_groups.add(group_name)
                 mapped_regions.append(region)
-                region_matched = True
                 break
-            else:
-                print(f"     No match: '{region}' not in {group_name}")
-        
-        if not region_matched:
-            print(f"     WARNING: Region '{region}' did not match any group!")
-            unmapped_regions.append(region)
-    
-    print(f"   DEBUG map_regions_to_groups: Final results:")
-    print(f"    • active_groups = {active_groups}")
-    print(f"    • mapped_regions = {mapped_regions}")
-    print(f"    • unmapped_regions = {unmapped_regions}")
     
     # If no regions match our defined groups, return empty
     if not mapped_regions:
-        print(f"   DEBUG map_regions_to_groups: No mapped regions, returning empty")
         return '', ''
     
     # Determine region group
     if len(active_groups) > 1:
         region_group = "multi"
-        print(f"   DEBUG map_regions_to_groups: Multiple groups detected, setting region_group = 'multi'")
     elif len(active_groups) == 1:
         region_group = list(active_groups)[0]
-        print(f"   DEBUG map_regions_to_groups: Single group detected, setting region_group = '{region_group}'")
     else:
         region_group = ''
-        print(f"   DEBUG map_regions_to_groups: No groups detected, setting region_group = ''")
     
     # Create comma-separated regions string
     regions_string = ','.join(sorted(mapped_regions))
-    print(f"   DEBUG map_regions_to_groups: Final regions_string = '{regions_string}'")
     
-    print(f"   DEBUG map_regions_to_groups: Returning ({region_group}, {regions_string})")
     return region_group, regions_string
 
 def assume_role_with_oidc(account_id, role_name, session_name="OIDCSession"):
@@ -482,11 +552,23 @@ def main():
     parser.add_argument('--member-role', 
                         default='tenant-compass-member-role',
                         help='IAM role name to use for accessing member accounts to get region information (default: tenant-compass-member-role)')
+    parser.add_argument('--org-id',
+                        help='Process only the specified organization account ID (for debugging)')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Enable detailed region analysis and verbose logging (slower but more detailed)')
     
     args = parser.parse_args()
     member_role_name = args.member_role
+    org_id_filter = args.org_id
+    verbose_mode = args.verbose
     
     print(f" Using member account role: {member_role_name}")
+    if org_id_filter:
+        print(f" Debug mode: Will process only organization {org_id_filter}")
+    if verbose_mode:
+        print(f" Verbose mode: Enabled detailed region analysis")
+    else:
+        print(f" Fast mode: Using optimized region detection")
     
     # Validate required environment variables
     required_vars = ['OUTPUT_BUCKET', 'DYNAMO_TABLE_NAME', 'CROSS_ACCOUNT_OIDC_ROLE_NAME',
@@ -518,6 +600,16 @@ def main():
 
         print(f" Total active Cloud Usage tenant accounts found: {len(tenant_ids)}")
         print("Tenant IDs:", tenant_ids)
+        
+        # Filter for specific organization if requested
+        if org_id_filter:
+            if org_id_filter in tenant_ids:
+                tenant_ids = [org_id_filter]
+                print(f" Debug mode: Processing only organization {org_id_filter}")
+            else:
+                print(f" Error: Organization {org_id_filter} not found in active tenants")
+                print(f" Available tenant IDs: {tenant_ids}")
+                sys.exit(1)
 
     except Exception as e:
         print(f" Error scanning DynamoDB table: {e}")
@@ -603,8 +695,12 @@ def main():
                             account_session = None
                     
                     if account_tagging_client and account_session:
-                        # Use the session for multi-region scanning
-                        active_regions = get_active_regions_multi_region(account_session, account_id)
+                        # Use optimized or verbose region detection based on mode
+                        if verbose_mode:
+                            active_regions = get_active_regions_multi_region(account_session, account_id)
+                        else:
+                            active_regions = get_active_regions_fast(account_session, account_id, verbose=False)
+                        
                         region_group, regions = map_regions_to_groups(active_regions)
                         print(f" Account {account_id}: Active regions: {active_regions}, Group: {region_group}, Regions: {regions}")
                     else:
