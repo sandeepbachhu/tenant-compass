@@ -21,7 +21,10 @@ DYNAMO_TABLE_NAME = os.getenv('DYNAMO_TABLE_NAME')
 ROLE_NAME = os.getenv('CROSS_ACCOUNT_OIDC_ROLE_NAME')
 AZURE_TENANT_ID = os.getenv('AZURE_TENANT_ID')
 AZURE_CLIENT_ID = os.getenv('AZURE_CLIENT_ID')
-AZURE_CLIENT_SECRET = os.getenv('AZURE_CLIENT_SECRET')
+# AZURE_CLIENT_SECRET will be retrieved from AWS Secrets Manager or environment variable
+AZURE_CLIENT_SECRET_NAME = os.getenv('AZURE_CLIENT_SECRET_NAME')  # Name of secret in AWS Secrets Manager
+AZURE_CLIENT_SECRET_REGION = os.getenv('AZURE_CLIENT_SECRET_REGION', 'us-east-1')  # Region for secret
+AZURE_CLIENT_SECRET = None  # Will be set dynamically
 SAVE_LOCAL = True
 
 # Region group mapping
@@ -486,13 +489,15 @@ def assume_role_with_oidc(account_id, role_name, session_name="OIDCSession"):
         boto3.Session: A boto3 session with the assumed role credentials
     """
     try:
-        # Get credentials using OIDC authentication
+        # Get credentials using OIDC authentication with AWS Secrets Manager support
         credentials = get_oidc_credentials(
             account_id=account_id,
             role_name=role_name,
             tenant_id=AZURE_TENANT_ID,
             client_id=AZURE_CLIENT_ID,
-            client_secret=AZURE_CLIENT_SECRET
+            client_secret=AZURE_CLIENT_SECRET,
+            secret_name=AZURE_CLIENT_SECRET_NAME,
+            secret_region=AZURE_CLIENT_SECRET_REGION
         )
         
         # Create a boto3 session with the credentials
@@ -572,13 +577,24 @@ def main():
     
     # Validate required environment variables
     required_vars = ['OUTPUT_BUCKET', 'DYNAMO_TABLE_NAME', 'CROSS_ACCOUNT_OIDC_ROLE_NAME',
-                     'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET']
+                     'AZURE_TENANT_ID', 'AZURE_CLIENT_ID']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    # Check for AZURE_CLIENT_SECRET or AZURE_CLIENT_SECRET_NAME
+    if not os.getenv('AZURE_CLIENT_SECRET') and not os.getenv('AZURE_CLIENT_SECRET_NAME'):
+        missing_vars.append('AZURE_CLIENT_SECRET or AZURE_CLIENT_SECRET_NAME')
     
     if missing_vars:
         print(f" Missing required environment variables: {', '.join(missing_vars)}")
         print("Please set these variables in your .env file or environment.")
+        print("Note: You can either set AZURE_CLIENT_SECRET directly or AZURE_CLIENT_SECRET_NAME to use AWS Secrets Manager.")
         sys.exit(1)
+    
+    # Print configuration info
+    if AZURE_CLIENT_SECRET_NAME:
+        print(f" Using AWS Secrets Manager for AZURE_CLIENT_SECRET: {AZURE_CLIENT_SECRET_NAME} (region: {AZURE_CLIENT_SECRET_REGION})")
+    else:
+        print(f" Using environment variable for AZURE_CLIENT_SECRET")
 
     dynamodb = boto3.resource('dynamodb', region_name=REGION)
     table = dynamodb.Table(DYNAMO_TABLE_NAME)
