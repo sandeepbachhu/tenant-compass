@@ -39,7 +39,7 @@ REGION_GROUPS = {
 
 # Tag name variations for robust tag detection
 ENVIRONMENT_TAG_VARIATIONS = ['environment', 'Environment', 'ENVIRONMENT', 'env', 'Env', 'ENV']
-AIDE_ID_TAG_VARIATIONS = ['aide-id', 'AIDE_ID', 'AIDE-ID', 'aide_id', 'aideId', 'AideId']
+AIDE_ID_TAG_VARIATIONS = ['Aide_ID', 'aide-id', 'AIDE_ID', 'AIDE-ID', 'aide_id', 'aideId', 'AideId']
 
 OUTPUT_DIR = pathlib.Path.home() / "aws-org-scripts-outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,6 +59,31 @@ def find_tag_value(tags_dict, tag_variations):
         if variation in tags_dict:
             return tags_dict[variation]
     return ''
+
+def normalize_environment_value(env_value):
+    """
+    Normalize environment value to either 'prod', 'non-prod', or empty string.
+    Handles all case variations: PROD, prod, Prod, PRODUCTION, Production, etc.
+    
+    Args:
+        env_value (str): Raw environment tag value
+        
+    Returns:
+        str: 'prod', 'non-prod', or empty string
+    """
+    if not env_value or not env_value.strip():
+        return ''  # Return empty string for missing/empty tags
+    
+    # Convert to lowercase and strip whitespace for case-insensitive comparison
+    env_lower = env_value.lower().strip()
+    
+    # Check if it matches production variants (case-insensitive)
+    prod_variants = ['prod', 'production', 'prd']
+    
+    if env_lower in prod_variants:
+        return 'prod'
+    else:
+        return 'non-prod'
 
 def get_active_regions_fast(session, account_id, verbose=False):
     """
@@ -681,8 +706,15 @@ def main():
                     tags = {tag['Key']: tag['Value'] for tag in tags_response.get('Tags', [])}
                     
                     # Use helper function to find tag values by checking multiple variations
-                    env_value = find_tag_value(tags, ENVIRONMENT_TAG_VARIATIONS)
+                    raw_env_value = find_tag_value(tags, ENVIRONMENT_TAG_VARIATIONS)
+                    env_value = normalize_environment_value(raw_env_value)  # Normalize environment value
                     aide_id_value = find_tag_value(tags, AIDE_ID_TAG_VARIATIONS)
+                    
+                    # Debug logging for environment value normalization
+                    if raw_env_value != env_value:
+                        print(f"   Environment tag normalized: '{raw_env_value}' → '{env_value}' for account {account_id}")
+                    elif raw_env_value:
+                        print(f"   Environment tag kept as-is: '{env_value}' for account {account_id}")
                     
                 except Exception as e:
                     print(f" Warning: Could not fetch tags for account {account_id}: {e}")
